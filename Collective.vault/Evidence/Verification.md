@@ -240,7 +240,24 @@ Each count belongs to one revision; none is a later revision's result.
 | `fe74d3e` (initial reliability candidate) | 201 test methods. The private generated QA sandbox recorded 199 tests and 11/11 gates passing before the final first-run-grace regressions were added | Historical candidate evidence; it included the later-removed daily quality job |
 | Review-fix revision after `2f555b6` | 212 test methods; `python3 -m unittest` over all five test modules ran 212 tests, OK, 1 skipped (`systemd-analyze` absent in the review sandbox) | Local review-phase measurement only. The pipeline's own gate run and the protected Python 3.12/3.13/3.14 CI are the authoritative results and are not recorded here in advance |
 
-The daily quality job, its offline gate-tool provisioning and its receipt consumer were removed in the review-fix revision, so no automatic quality evidence exists for any revision. Host status: on 2026-11-05 the heartbeat was paused for this iteration and the two job timers were not installed. Actual host acceptance is recorded later, after it happens.
+The daily quality job, its offline gate-tool provisioning and its receipt consumer were removed in the review-fix revision, so no automatic quality evidence exists for any revision. Host status before acceptance (kept as history): on 2026-11-05 the heartbeat was paused for this iteration and the two job timers were not installed.
+
+## Candidate host acceptance (2026-11-04T20:59Z)
+
+Recorded after it happened. The candidate was `269ee7e` plus Codex 3's uncommitted strict tool-version and parser-documentation follow-up. The public `main` branches on both remotes still point at `f21a331`; publication follows the protected CI.
+
+| Check | Codex 3 host acceptance (20:59:27Z) | Claude independent re-check (21:01:11Z) |
+|---|---|---|
+| Gates and tests | 11/11 gates PASS on Python 3.14.8; full suite of 215 tests passing | 215 test methods (static count) |
+| Metadata job install | `install_coordination_jobs.py` reported `installed`; four generated units passed `systemd-analyze verify` | Installer receipt `installed` |
+| Timers | Exactly three enabled and active: heartbeat, collaboration, cohesion. The gateway installer resumed the heartbeat | Same three enabled and active. Each service `Result=success`, exit 0 |
+| Unit files | All six live unit files byte-match the generated units | All six byte-match the installers' current output |
+| Job receipts | Collaboration and cohesion `ok`, exact source hash | Both `ok`, fresh, source hash matches, no source or metric gaps, written after the confirmed install |
+| No automatic QA | Quality timer not found and inactive | Quality is unscheduled by contract: no unit file, not enabled, not active |
+| Gateway view | `coord_jobs` observed two `ok`, non-stale receipts; notice counts are metadata only | Board fresh; unknown-notice ledger empty; no legacy hold |
+| Effects | Runtime hashes unchanged; no model turns | Read-only collector; no units changed, no jobs run, no mail sent |
+
+**Meaning.** These are candidate observations at one point in time. They are not a guarantee of ongoing schedule health, and they do not prove that any agent work was accepted or completed. Ongoing health is the heartbeat's job (`jobs:<name>` alerts on failed, degraded, unknown or stale receipts).
 
 ## Research and gate provenance (2026-11-05, zero-touch hive phase)
 

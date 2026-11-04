@@ -110,10 +110,11 @@ def read_private_json(path: str | os.PathLike[str], *, limit: int = DEFAULT_LIMI
 
 
 def parse_json(data: str | bytes | bytearray) -> object:
-    """Parse untrusted JSON text; every malformed, non-UTF-8 or too-deep input raises ValueError.
+    """Parse JSON and normalize encoding, syntax and parser-recursion failures to ValueError.
 
-    This is the one JSON boundary for files and transport output, so parser recursion
-    limits surface as ordinary malformed data instead of escaping as RecursionError.
+    Callers bound file or transport bytes. Nesting supported by the interpreter is
+    accepted; this helper imposes no additional depth cap. Interpreter recursion
+    failures surface as malformed data instead of escaping as RecursionError.
     """
     text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else data
     try:

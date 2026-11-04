@@ -96,7 +96,7 @@ Stated limits, from `capabilities`:
 
 ## 4. Ongoing comms: the scheduler
 
-There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one notification gateway**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK; historical). It was paused by root during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in `Collective.vault/Evidence/Verification.md`); query current state with `systemctl --user is-active collective-heartbeat.timer`. On 2026-11-05 it was paused again for the zero-touch release and stays paused until host acceptance. No second notifier exists. The bounded jobs in §4.1 never notify.
+There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one notification gateway**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK; historical). It was paused by root during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in `Collective.vault/Evidence/Verification.md`); query current state with `systemctl --user is-active collective-heartbeat.timer`. On 2026-11-05 it was paused again for the zero-touch release, and resumed by the gateway installer in the candidate host acceptance on 2026-11-04T20:59Z (2026-11-05 local). No second notifier exists. The bounded jobs in §4.1 never notify.
 
 | Item | Detail |
 |---|---|
@@ -119,7 +119,7 @@ Jobs never send mail, notify, wake agents or retry effects. Their metrics are de
 
 **No scheduled quality execution.** The first candidate also had a daily `quality` job running `tools/check.py` unattended. The Vesper review found it ran mutable checkout tests with live `HOME` and Unix-socket access and that its tool pins were observed rather than enforced, so it was removed before release; `--job quality` is refused and the heartbeat ignores any leftover quality receipt. Quality runs only explicitly: by people, the git hooks and protected CI. No automatic quality result is claimed.
 
-`install_coordination_jobs.py` (Codex 3) installs the units under the one installation lock it shares with `install_monitor.py` for the whole transaction. It runs `systemd-analyze --user verify` and backs up any prior managed units. It writes an `installing` / `installed` / `rolled-back` receipt, and when a step raises it restores each timer's enabled and active state. Rollback is exception recovery, not atomicity across power loss or SIGKILL. It refuses to overwrite units it does not manage. **On 2026-11-05 the jobs are proposed and not installed.** Operator detail is in the vault Scheduler Runbook.
+`install_coordination_jobs.py` (Codex 3) installs the units under the one installation lock it shares with `install_monitor.py` for the whole transaction. It runs `systemd-analyze --user verify` and backs up any prior managed units. It writes an `installing` / `installed` / `rolled-back` receipt, and when a step raises it restores each timer's enabled and active state. Rollback is exception recovery, not atomicity across power loss or SIGKILL. It refuses to overwrite units it does not manage. Before 2026-11-04T20:59Z the jobs were proposed and not installed; they were installed in the candidate host acceptance then (dated evidence in the vault Verification note). Operator detail is in the vault Scheduler Runbook.
 
 ### 4.2 Notice journal
 

@@ -801,6 +801,9 @@ class PinnedToolTests(unittest.TestCase):
         pinned = gates.PINS["ruff"].split("==", 1)[1]
         cases = {
             f"ruff 0.0.0; compatible-format {pinned}": False,
+            f"compatibility-format {pinned}\nruff 0.0.0": False,
+            f"mypy {pinned}": False,
+            f"ruff {pinned}\nruff 0.0.0": False,
             f"ruff {pinned}0": False,
             "ruff": False,
             f"ruff {pinned}": True,
@@ -818,6 +821,58 @@ class PinnedToolTests(unittest.TestCase):
                         with self.assertRaises(SystemExit):
                             gates.tool("ruff")
         gates.tool.cache_clear()
+
+    def test_public_format_gate_refuses_misleading_versions_before_formatter_effect(self) -> None:
+        checker = Path(__file__).parent / "tools/check.py"
+        spec = importlib.util.spec_from_file_location("collective_format_gates", checker)
+        assert spec is not None
+        assert spec.loader is not None
+        gates = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {spec.name: gates}):
+            spec.loader.exec_module(gates)
+        pinned = gates.PINS["ruff"].split("==", 1)[1]
+        cases = {
+            "wrong-primary-secondary-pin": (f"ruff 0.0.0; compatible-format {pinned}", False),
+            "prefix-banner-wrong-primary": (f"compatibility-format {pinned}\nruff 0.0.0", False),
+            "wrong-program": (f"mypy {pinned}", False),
+            "conflicting-primary-lines": (f"ruff {pinned}\nruff 0.0.0", False),
+            "exact-primary": (f"ruff {pinned}", True),
+        }
+        for label, (reported, accepted) in cases.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                marker, receipt = root / "formatter-ran", root / "receipt.json"
+                binary = root / "bin"
+                binary.mkdir(mode=0o700)
+                fake = binary / "ruff"
+                fake.write_text(
+                    f"#!{sys.executable}\n"
+                    "from pathlib import Path\n"
+                    "import sys\n"
+                    "if sys.argv[1:] == ['--version']:\n"
+                    f"    print({reported!r})\n"
+                    "else:\n"
+                    f"    Path({str(marker)!r}).write_text('formatter ran\\n', encoding='utf-8')\n",
+                    encoding="utf-8",
+                )
+                fake.chmod(0o700)
+                result = subprocess.run(  # noqa: S603 - real checker, isolated PATH and owned fake formatter
+                    [sys.executable, "-I", "-B", str(checker), "--only", "format", "--receipt", str(receipt)],
+                    env={**os.environ, "PATH": str(binary), "HOME": str(root)},
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                self.assertEqual(marker.exists(), accepted, result.stdout + result.stderr)
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    report = json.loads(receipt.read_text())
+                    self.assertIs(report["ok"], True)
+                    self.assertEqual([gate["name"] for gate in report["gates"]], ["format"])
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertNotIn("ALL GATES PASS", result.stdout)
 
 
 class HeartbeatTests(unittest.TestCase):
@@ -2268,6 +2323,9 @@ class NativeFramingRealSocketRegressions(unittest.TestCase):
         if self.frame_case == "shape":
             reply["result"] = []
         payload = json.dumps(reply, separators=(",", ":")).encode()
+        if self.frame_case == "valid-deep":
+            nested = b"[" * 2000 + b"0" + b"]" * 2000
+            payload = payload[:-2] + b',"untrusted":' + nested + b"}}"
         if self.frame_case in {"exact", "over"}:
             payload += b" " * (self.frame_cap + (self.frame_case == "over") - len(payload) - 1)
         if self.frame_case != "eof":
@@ -2306,7 +2364,7 @@ class NativeFramingRealSocketRegressions(unittest.TestCase):
         ready, stop = threading.Event(), threading.Event()
         errors: list[BaseException] = []
         requests: list[dict[str, Any]] = []
-        cap = 256
+        cap = 8192 if case == "valid-deep" else 256
         self.frame_case, self.frame_cap = case, cap
         self.frame_ready, self.frame_stop = ready, stop
         self.frame_errors, self.frame_requests = errors, requests
@@ -2363,6 +2421,26 @@ class NativeFramingRealSocketRegressions(unittest.TestCase):
                 self.assertEqual(requests[0]["method"], "agent.list")
                 self.assertEqual(requests[0]["params"], {})
                 return result, elapsed
+
+    def test_valid_closed_deep_native_frame_obeys_runtime_parser_without_crashing(self):
+        try:
+            json.loads("[" * 2000 + "0" + "]" * 2000)
+        except RecursionError:
+            parses = False
+        else:
+            parses = True
+        for adapter in ("core", "heartbeat"):
+            with self.subTest(adapter=adapter):
+                result, _ = self.exchange(adapter, "valid-deep")
+                if not parses:
+                    self.assertIsNone(result)
+                elif adapter == "core":
+                    self.assertIsInstance(result, dict)
+                    assert isinstance(result, dict)
+                    self.assertEqual(result["agents"], [])
+                    self.assertIn("untrusted", result)
+                else:
+                    self.assertEqual(result, [])
 
     def test_correlated_frame_segmented_positive(self):
         for adapter in ("core", "heartbeat"):

@@ -48,6 +48,12 @@ SOURCES = (
 )
 MAX_SCAN_BYTES = 2_000_000
 PINS = {"ruff": "ruff==0.17.3", "mypy": "mypy==2.4.1", "bandit": "bandit==1.9.4", "coverage": "coverage==7.17.1"}
+VERSION_FORMATS = {
+    "ruff": r"ruff (?P<version>\d+\.\d+\.\d+)",
+    "mypy": r"mypy (?P<version>\d+\.\d+\.\d+)(?: \(compiled: (?:yes|no)\))?",
+    "bandit": r"bandit (?P<version>\d+\.\d+\.\d+)",
+    "coverage": r"Coverage\.py, version (?P<version>\d+\.\d+\.\d+)(?: (?:with|without) C extension)?",
+}
 
 # ---------------------------------------------------------------- fitness rules (architecture as code)
 BANNED_CALLS = {
@@ -537,19 +543,38 @@ class Gate:
     detail: list[str] = field(default_factory=list)
 
 
+def reported_pin_matches(name: str, output: str) -> bool:
+    """Validate the tool's recognized primary line, allowing only its standard ancillary lines.
+
+    This checks reported versions; it does not authenticate a binary against a
+    hostile process running as the same user.
+    """
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return False
+    primary = re.fullmatch(VERSION_FORMATS[name], lines[0])
+    pinned = PINS[name].split("==", 1)[1]
+    if primary is None or primary.group("version") != pinned:
+        return False
+    ancillary = lines[1:]
+    if name == "bandit":
+        return len(ancillary) <= 1 and all(re.fullmatch(r"python version = .+", line) for line in ancillary)
+    if name == "coverage":
+        expected = f"Full documentation is at https://coverage.readthedocs.io/en/{pinned}"
+        return ancillary in ([], [expected])
+    return not ancillary
+
+
 @functools.cache
 def tool(name: str) -> list[str]:
-    """Return the exact pinned tool: a PATH copy whose primary --version reports the pin, else uv's pinned run.
+    """Use a PATH tool reporting its exact primary pin, else uv's pinned run if no PATH tool exists.
 
-    The primary version is the first version token in --version output; a PATH tool
-    reporting any other primary version fails closed instead of silently gating with it.
+    Wrong, unrecognized or ambiguous PATH version output fails closed.
     """
     found = shutil.which(name)
     if found:
         rc, out = run([found, "--version"])
-        pinned = PINS[name].split("==", 1)[1]
-        primary = re.search(r"\d+(?:\.\d+)+", out)
-        if rc != 0 or primary is None or primary.group(0) != pinned:
+        if rc != 0 or not reported_pin_matches(name, out):
             msg = f"{name} on PATH is not {PINS[name]}; install the pin or remove it from PATH"
             raise SystemExit(msg)
         return [found]

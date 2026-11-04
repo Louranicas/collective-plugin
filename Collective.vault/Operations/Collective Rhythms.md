@@ -30,9 +30,11 @@ A daily `quality` job that ran the gates unattended was part of the first candid
 - **Unmeasured stays unmeasured.** Absent owner or reviewer fields are reported as unmeasured, not inferred.
 - **No inferred acceptance.** Submission, read flags, replies and task stages never establish acceptance or completion.
 
-## Status (2026-11-05)
+## Status
 
-The heartbeat is **paused** until host acceptance. The two job timers are **not yet installed**. Codex 3 will append the dated live acceptance. Live smoke runs gave `status: ok` for the collaboration and cohesion jobs (#623). The notice proof passed: one effect, and after reload an `unknown` notice became `submitted` with no resend (#621).
+**Candidate host acceptance passed on 2026-11-04T20:59Z (2026-11-05 local)** (Codex 3; independently re-checked by Claude at 21:01Z). Exactly three timers are enabled and active: the heartbeat gateway, collaboration and cohesion. Both job receipts read `ok` and match the source hash, and no quality timer exists. The public `main` branches still hold the earlier release; publication follows the protected CI. Dated evidence: [[Evidence/Verification#Candidate host acceptance (2026-11-04T20:59Z)]].
+
+History: before that, the heartbeat was paused and the two job timers were not installed. Earlier live smoke runs gave `status: ok` for the collaboration and cohesion jobs (#623). The notice proof passed: one effect, and after reload an `unknown` notice became `submitted` with no resend (#621).
 
 ## History
 
