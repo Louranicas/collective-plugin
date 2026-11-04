@@ -154,7 +154,7 @@ Measured 2026-11-04T13:03:50.018750+00:00 (UTC; Australia/ACT is the following c
 
 | File | sha256 prefix (16 hex) |
 |---|---|
-| `collective.py` | `5c35b534eff2b99e` |
+| `collective.py` | `b7ced86f1416f251` |
 | `heartbeat.py` | `04e66690a95ba215` |
 | `install_monitor.py` | `d4c1a9d8a595e818` |
 | `test_collective.py` | `d983994f52b30d04` |
@@ -171,7 +171,7 @@ Measured 2026-11-04T13:03:50.018750+00:00 (UTC; Australia/ACT is the following c
 
 The two delivery defects were independently reproduced against the previous public draft revision, with temporary effects and mocked notification transport. The follow-up adds those behavioral regressions plus a malformed/error-code matrix. No source-text assertions substitute for those effects.
 
-The `collective.py` hash above includes a later wording-only change: shared tool-failure messages now read "outcome unknown" instead of "submission outcome unknown", because read-only commands share that parser. Classification is unchanged; re-measured locally at 101 OK with the same per-module coverage.
+The `collective.py` hash above includes a later wording-only change: shared tool-failure, timeout and output-limit messages now read "outcome unknown" instead of submission/write wording, because read-only commands share that transport path. Classification is unchanged; re-measured locally at 101 OK with the same per-module coverage.
 
 **Release state at this measurement:** the prior revision `ed065371` passed the first pipeline and GitHub's Python 3.12/3.13/3.14 CI, but PR #1 remains **draft**. These follow-up hashes still require a new full pipeline and remote CI before merge/deployment. GitLab main still contains only the empty bootstrap. The heartbeat timer is paused during hardening; the plugin remains registered. Earlier commits retain nonsecret diagnostic labels and test routing identifiers; no history-scrub claim is made.
 

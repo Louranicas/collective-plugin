@@ -472,14 +472,14 @@ def apply_mail_plan(
 def _remaining(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        msg = "Command timed out; an attempted write may already have happened"
+        msg = "Command timed out; outcome unknown"
         raise TransportUncertain(msg)
     return remaining
 
 
 def _check_output_cap(output: bytearray, errors: bytearray) -> None:
     if len(output) + len(errors) > MAX_TOOL_OUTPUT:
-        msg = "Tool output exceeded 2 MB; submission outcome may be unknown"
+        msg = "Tool output exceeded 2 MB; outcome unknown"
         raise TransportUncertain(msg)
 
 
@@ -600,7 +600,7 @@ class Backend:
                     raise
                 returncode = proc.returncode
         except subprocess.TimeoutExpired as exc:
-            msg = "Command timed out; an attempted write may already have happened"
+            msg = "Command timed out; outcome unknown"
             raise TransportUncertain(msg) from exc
         except OSError as exc:
             msg = f"Command unavailable: {Path(argv[0]).name}"
