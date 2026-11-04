@@ -9,6 +9,7 @@ This does not register or enable the Herdr/tuios plugin.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -19,6 +20,10 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 ROOT = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("collective_core", ROOT / "collective.py")
@@ -28,7 +33,7 @@ _core = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_core)
 CollectiveError, private_dir = _core.CollectiveError, _core.private_dir
 read_private_json, write_private_json = _core.read_private_json, _core.write_private_json
-read_owned_unit_bytes = _core.read_owned_unit_bytes
+read_owned_bytes = _core.read_owned_bytes
 locked_private_file = _core.locked_private_file
 MAX_UNIT_BYTES = 65536
 SERVICE = "collective-heartbeat.service"
@@ -140,7 +145,7 @@ def unit_originals(destination: Path) -> dict[str, bytes | None]:
     for name in (SERVICE, TIMER):
         path = destination / name
         try:
-            data = read_owned_unit_bytes(path, limit=MAX_UNIT_BYTES)
+            data = read_owned_bytes(path, limit=MAX_UNIT_BYTES)
         except FileNotFoundError:
             originals[name] = None
             continue
@@ -196,10 +201,22 @@ def accepted_receipt(path: Path) -> dict[str, str] | None:
     return {str(k): v for k, v in prior.items() if isinstance(v, str)}
 
 
-def install() -> dict[str, str]:
-    """Serialize the complete scheduler transaction, including all rollback and receipt work."""
+@contextlib.contextmanager
+def installation_lock() -> Iterator[None]:
+    """Hold the one nonblocking lock every user-systemd installer keeps for its whole transaction.
+
+    Both installers share it, so neither can observe or roll back the other's
+    in-flight daemon-reload or unit state. Rollback is exception recovery only:
+    it gives no atomicity across power loss or SIGKILL.
+    """
     state = private_dir(Path.home() / ".local/state/collective-plugin")
     with locked_private_file(state / "scheduler-install.lock", blocking=False):
+        yield
+
+
+def install() -> dict[str, str]:
+    """Serialize the complete scheduler transaction, including all rollback and receipt work."""
+    with installation_lock():
         return _install()
 
 

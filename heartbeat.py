@@ -85,9 +85,12 @@ TRANSIENT = ("peer:", "ring-loss:")
 ACTIVE_MAIL_S = 15 * 60
 QUIET_FULL_S = 15 * 60
 JOB_START_GRACE_S = 180.0
-# A fresh daily timer need not fire before the next calendar day. Allow a
-# 25-hour local day at DST fallback, plus its service deadline and jitter.
-QUALITY_FIRST_RUN_GRACE_S = 25 * 3600 + 660 + 30
+# A pre-journal failed attempt has no receipt binding, so no evidence can show whether it was
+# delivered. Every notice stays held until an operator inspects the inbox and runs the release.
+LEGACY_HOLD_ISSUE = (
+    "Legacy notice outcome unknown and unreconcilable; all notices held. After inspecting the human "
+    "inbox, run heartbeat.py --release-legacy-notice-hold"
+)
 ACTIVE_STAGES = {"doing", "verify", "review", "plan"}
 
 
@@ -146,7 +149,7 @@ def herdr_agents() -> list[dict[str, str | None]] | None:
                 require(condition=len(buf) + len(chunk) <= MAX_BYTES, message="Herdr response exceeds limit")
                 require(condition=not chunk.strip(), message="Herdr response has trailing data")
                 buf.extend(chunk)
-        response = json.loads(buf.split(b"\n", 1)[0])
+        response = _private_files.parse_json(buf.split(b"\n", 1)[0])
         if not isinstance(response, dict) or response.get("id") != "collective-heartbeat" or response.get("error"):
             return None
         res = response.get("result") or {}
@@ -263,7 +266,7 @@ def metadata(value: object, limit: int = 64) -> str:
 
 def records(text: str, key: str) -> list[dict[str, object]]:
     """Validate a JSON object containing an array of metadata objects."""
-    value: object = json.loads(text)
+    value: object = _private_files.parse_json(text)
     if not isinstance(value, dict) or not isinstance(value.get(key), list):
         raise TypeError("Malformed metadata response")
     rows = value[key]
@@ -340,7 +343,7 @@ def peers() -> dict[str, bool]:
     if rc != 0:
         return {}
     try:
-        d = json.loads(out)
+        d = _private_files.parse_json(out)
     except (ValueError, TypeError):
         return {}
     if not isinstance(d, dict) or not isinstance(d.get("Peer"), dict):
@@ -443,11 +446,33 @@ def main() -> int:
         print("heartbeat: another run holds the lock; skipping")
         return 0
     try:
+        if "--release-legacy-notice-hold" in sys.argv:
+            print(json.dumps(release_legacy_hold(time.time())))
+            return 0
         SWEEP.end = time.monotonic() + READ_BUDGET_S
         return sweep(dry=dry)
     finally:
         SWEEP.end = math.inf
         os.close(lock_fd)
+
+
+def release_legacy_hold(now: float) -> dict[str, object]:
+    """Operator-only migration: back up memory, then clear a legacy hold without acknowledging any alert.
+
+    Run only after a human has inspected the inbox for the pre-upgrade notice. Nothing
+    is marked sent, so every alert still active notifies normally on the next sweep,
+    including one the legacy attempt may already have delivered.
+    """
+    raw: dict[str, object] = load("memory.json", {})
+    mem = memory_state(raw)
+    if not mem["notice_legacy_hold"]:
+        return {"released": False, "reason": "no legacy notice hold"}
+    backup = f"memory.legacy-hold-{dt.datetime.fromtimestamp(now, dt.UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    save(backup, raw)
+    mem["notice_legacy_hold"] = False
+    mem["notice_issue"] = metadata(f"Legacy notice hold released by operator; prior memory in {backup}", 256)
+    save("memory.json", mem)
+    return {"released": True, "backup": str(STATE / backup), "acknowledged_alerts": 0}
 
 
 def agent_rows(
@@ -614,12 +639,11 @@ def coordination_status(now: float) -> tuple[dict[str, object], list[tuple[str, 
     except (TypeError, ValueError):
         installed_age = math.inf
     jobs: dict[str, object] = {}
-    for name, age_limit in (("collaboration", 1800), ("cohesion", 5400), ("quality", 172800)):
-        grace_limit = QUALITY_FIRST_RUN_GRACE_S if name == "quality" else JOB_START_GRACE_S
+    for name, age_limit in (("collaboration", 1800), ("cohesion", 5400)):
         try:
             row = coordination_receipt(name, now, age_limit)
         except FileNotFoundError:
-            row = {"status": "awaiting-first-run" if installed_age < grace_limit else "unknown"}
+            row = {"status": "awaiting-first-run" if installed_age < JOB_START_GRACE_S else "unknown"}
         except (OSError, TypeError, ValueError):
             row = {"status": "unknown"}
         jobs[name] = row
@@ -715,7 +739,10 @@ def notice_batch(new: list[tuple[str, str]], *, request_id: str = "") -> tuple[l
 
 
 def notify(new: list[tuple[str, str]], mem: MemoryState, now: float) -> None:
-    """Journal one fixed-human notice; uncertain effects are held, never automatically retried."""
+    """Journal one fixed-human notice; unknown outcomes are never resent, known refusals back off."""
+    if mem["notice_legacy_hold"]:
+        mem["notice_issue"] = LEGACY_HOLD_ISSUE
+        return
     backoff = min(3600, 300 * 2 ** min(mem["notice_failures"], 4))
     last = mem["notices"][-1]["status"] if mem["notices"] else ""
     if last == "refused" and mem["notice_failures"] and now - mem["notice_attempt"] < backoff:
@@ -781,7 +808,7 @@ def notice_endpoint() -> str:
 def notice_result(rc: int, output: str) -> tuple[str, int | None]:
     """Only a documented rejection is refused; only a positive ID at exit zero is submitted."""
     try:
-        value = json.loads(output)
+        value = _private_files.parse_json(output)
     except (ValueError, TypeError):
         return "unknown", None
     if not isinstance(value, dict):
@@ -822,7 +849,7 @@ def notice_ring_snapshot() -> tuple[str, list[object]] | None:
         if rc:
             return None
         try:
-            value = json.loads(output)
+            value = _private_files.parse_json(output)
         except (ValueError, TypeError):
             return None
         if not isinstance(value, dict) or value.get("success") is False or value.get("error"):
@@ -888,6 +915,7 @@ def notice_summary(mem: MemoryState) -> dict[str, object]:
         "records": len(mem["notices"]),
         "unknown_outcomes": sum(r["status"] == "unknown" for r in mem["notices"]),
         "held_alerts": len(_notice_state.held_keys(mem["notices"])),
+        "legacy_unknown_hold": mem["notice_legacy_hold"],
         "issue": mem["notice_issue"],
         "meaning": "Stored submission is not a read receipt or acceptance; unknown notices are not resent.",
     }
@@ -917,7 +945,7 @@ def ring_alert(mem: MemoryState, alerts: list[tuple[str, str]]) -> str | None:
     if before_rc or ring_rc or after_rc:
         return None
     try:
-        before, ring, after = (json.loads(text) for text in (before_text, ring_text, after_text))
+        before, ring, after = (_private_files.parse_json(text) for text in (before_text, ring_text, after_text))
         if not all(isinstance(row, dict) for row in (before, ring, after)):
             return None
         boot = before.get("boot_id")
@@ -948,11 +976,7 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
     # keys (relay day, ring-loss boot, peer transitions) expire after OBSOLETE_S.
     tracked = {f"mail:{k}" for k in mem["unread_since"]} | {f"needs:{k}" for k in mem["needs_since"]}
     protected = active | tracked
-    resolved = {
-        k
-        for k in _notice_state.held_keys(mem["notices"])
-        if k.startswith(RESOLVABLE) and k not in protected
-    }
+    resolved = {k for k in _notice_state.held_keys(mem["notices"]) if k.startswith(RESOLVABLE) and k not in protected}
     mem["notices"] = _notice_state.resolve_keys(mem["notices"], resolved)
     if not dry:
         reconcile_notices(mem, protected, now)
@@ -970,10 +994,6 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
             mem["sent"].pop(f"peer:{h}:False", None)
         if f"peer:{h}:False" in active:
             mem["sent"].pop(f"peer:{h}:True", None)
-    if mem["notice_legacy_hold"]:
-        mem["sent"].update({k: now for k, _ in alerts if k not in mem["sent"]})
-        mem["notice_legacy_hold"] = False
-        mem["notice_issue"] = "Legacy notice outcome unknown; active alerts acknowledged without resend."
     new = [(k, t) for k, t in alerts if k not in mem["sent"]]
     board["notifications"] = notice_summary(mem)
     if dry:

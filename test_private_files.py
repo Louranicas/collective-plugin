@@ -41,12 +41,12 @@ class ReaderPolicies(unittest.TestCase):
         data = json.dumps(value, ensure_ascii=False).encode()
         self.write(data)
         self.assertEqual(readers.read_private_json(self.path), value)
-        self.assertEqual(readers.read_owned_unit_bytes(self.path), data)
+        self.assertEqual(readers.read_owned_bytes(self.path), data)
 
     def test_unit_policy_accepts_readable_modes_private_policy_refuses_them(self) -> None:
         self.write(b"[Unit]\nDescription=fixture\n", 0o644)
         self.parent.chmod(0o755)
-        self.assertEqual(readers.read_owned_unit_bytes(self.path), self.path.read_bytes())
+        self.assertEqual(readers.read_owned_bytes(self.path), self.path.read_bytes())
         with self.assertRaises(ValueError):
             readers.read_private_json(self.path)
         self.parent.chmod(0o700)
@@ -55,7 +55,7 @@ class ReaderPolicies(unittest.TestCase):
 
     def test_missing_leaf_and_parent_preserve_file_not_found(self) -> None:
         for path in (self.path, self.parent / "missing" / "value"):
-            for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+            for reader in (readers.read_private_json, readers.read_owned_bytes):
                 with self.subTest(path=path, reader=reader), self.assertRaises(FileNotFoundError):
                     reader(path)
 
@@ -77,11 +77,11 @@ class ReaderPolicies(unittest.TestCase):
         for mode in (0o620, 0o602, 0o666):
             self.write(b"unit", mode)
             with self.subTest(mode=oct(mode)), self.assertRaises(ValueError):
-                readers.read_owned_unit_bytes(self.path)
+                readers.read_owned_bytes(self.path)
         self.write(b"unit", 0o644)
         self.parent.chmod(0o775)
         with self.assertRaises(ValueError):
-            readers.read_owned_unit_bytes(self.path)
+            readers.read_owned_bytes(self.path)
         self.parent.chmod(0o700)
 
     def test_foreign_parent_ownership_is_refused(self) -> None:
@@ -93,14 +93,14 @@ class ReaderPolicies(unittest.TestCase):
         self.write(b"{}")
         uid = os.getuid()
         with mock.patch.object(os, "getuid", side_effect=(uid, uid + 1)), self.assertRaises(ValueError):
-            readers.read_owned_unit_bytes(self.path)
+            readers.read_owned_bytes(self.path)
 
     def test_symlink_leaf_never_reads_target(self) -> None:
         target = self.parent / "target"
         target.write_bytes(b"{}")
         target.chmod(0o600)
         self.path.symlink_to(target)
-        for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+        for reader in (readers.read_private_json, readers.read_owned_bytes):
             with self.subTest(reader=reader), self.assertRaises(OSError):
                 reader(self.path)
         self.assertEqual(target.read_bytes(), b"{}")
@@ -109,14 +109,14 @@ class ReaderPolicies(unittest.TestCase):
         self.write(b"{}")
         linked = self.parent / "linked-parent"
         linked.symlink_to(self.parent, target_is_directory=True)
-        for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+        for reader in (readers.read_private_json, readers.read_owned_bytes):
             with self.subTest(reader=reader), self.assertRaises(OSError):
                 reader(linked / self.path.name)
 
     def test_hardlink_refusal_preserves_original(self) -> None:
         self.write(b"{}")
         os.link(self.path, self.parent / "second-link")
-        for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+        for reader in (readers.read_private_json, readers.read_owned_bytes):
             with self.subTest(reader=reader), self.assertRaises(ValueError):
                 reader(self.path)
         self.assertEqual(self.path.read_bytes(), b"{}")
@@ -127,19 +127,19 @@ class ReaderPolicies(unittest.TestCase):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server, contextlib.chdir(self.parent):
             server.bind(self.path.name)
             self.path.chmod(0o600)
-            for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+            for reader in (readers.read_private_json, readers.read_owned_bytes):
                 with self.subTest(reader=reader), self.assertRaises(OSError):
                     reader(self.path)
         self.path.unlink()
         self.path.mkdir(mode=0o700)
-        for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+        for reader in (readers.read_private_json, readers.read_owned_bytes):
             with self.subTest(reader=reader), self.assertRaises(ValueError):
                 reader(self.path)
 
     def test_fifo_with_or_without_peer_is_refused_in_real_child(self) -> None:
         os.mkfifo(self.path, 0o600)
         module_dir = str(Path(readers.__file__).resolve().parent)
-        for name in ("read_private_json", "read_owned_unit_bytes"):
+        for name in ("read_private_json", "read_owned_bytes"):
             for has_peer in (False, True):
                 with self.subTest(reader=name, has_peer=has_peer), contextlib.ExitStack() as stack:
                     peer_fd = None
@@ -171,18 +171,18 @@ class ReaderPolicies(unittest.TestCase):
     def test_exact_limits_and_preexisting_oversize(self) -> None:
         self.write(b"{}")
         self.assertEqual(readers.read_private_json(self.path, limit=2), {})
-        self.assertEqual(readers.read_owned_unit_bytes(self.path, limit=2), b"{}")
-        for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+        self.assertEqual(readers.read_owned_bytes(self.path, limit=2), b"{}")
+        for reader in (readers.read_private_json, readers.read_owned_bytes):
             with self.subTest(reader=reader), self.assertRaises(ValueError):
                 reader(self.path, limit=1)
         self.write(b"")
-        self.assertEqual(readers.read_owned_unit_bytes(self.path), b"")
+        self.assertEqual(readers.read_owned_bytes(self.path), b"")
         with self.assertRaises(ValueError):
             readers.read_private_json(self.path)
 
     def test_invalid_limits_fail_without_creating_paths(self) -> None:
         for invalid in (0, -1, True, 1.5, readers.MAX_LIMIT + 1):
-            for reader in (readers.read_private_json, readers.read_owned_unit_bytes):
+            for reader in (readers.read_private_json, readers.read_owned_bytes):
                 with self.subTest(limit=invalid, reader=reader), self.assertRaises(ValueError):
                     reader(self.path, limit=cast("int", invalid))
         self.assertFalse(self.path.exists())
@@ -192,7 +192,7 @@ class ReaderPolicies(unittest.TestCase):
             self.write(data)
             with self.subTest(data=data), self.assertRaises(ValueError):
                 readers.read_private_json(self.path)
-            self.assertEqual(readers.read_owned_unit_bytes(self.path), data)
+            self.assertEqual(readers.read_owned_bytes(self.path), data)
 
     def test_deep_json_array_is_a_bounded_value_error_with_cause(self) -> None:
         depth = sys.getrecursionlimit() * 2
@@ -212,7 +212,7 @@ class ReaderPolicies(unittest.TestCase):
     def test_explicit_leaf_is_required(self) -> None:
         for path in ("", ".", ".."):
             with self.subTest(path=path), self.assertRaises(ValueError):
-                readers.read_owned_unit_bytes(path)
+                readers.read_owned_bytes(path)
 
     def test_growth_truncation_and_same_size_changes_are_refused(self) -> None:
         for change in ("grow", "truncate", "rewrite", "mode", "link"):
@@ -267,7 +267,7 @@ class ReaderPolicies(unittest.TestCase):
             return chunk
 
         with mock.patch.object(os, "read", side_effect=read_and_grow), self.assertRaises(ValueError):
-            readers.read_owned_unit_bytes(self.path, limit=16)
+            readers.read_owned_bytes(self.path, limit=16)
         self.assertEqual(received, 17)
 
     def test_directory_fd_anchors_leaf_after_parent_rename(self) -> None:
@@ -294,7 +294,7 @@ class ReaderPolicies(unittest.TestCase):
             return original_open(name, flags, mode, dir_fd=dir_fd)
 
         with mock.patch.object(os, "open", side_effect=open_and_rename):
-            self.assertEqual(readers.read_owned_unit_bytes(path), b"original")
+            self.assertEqual(readers.read_owned_bytes(path), b"original")
 
 
 if __name__ == "__main__":

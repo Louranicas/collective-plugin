@@ -1,6 +1,6 @@
-"""Review or transactionally install three bounded user coordination timers.
+"""Review or transactionally install two bounded metadata-only user coordination timers.
 
-Default prints exact unit proposals. --install changes only the six named user
+Default prints exact unit proposals. --install changes only the four named user
 units, their timer enablement/activity, external private backups and receipt.
 It never modifies the existing heartbeat or starts a model turn.
 """
@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 ROOT = Path(__file__).resolve().parent
 MARKER = "# Managed by local.collective coordination jobs;"
-JOBS = ("collaboration", "cohesion", "quality")
+JOBS = ("collaboration", "cohesion")
 CONTROL_SPACE = 32
 DELETE_CHARACTER = 127
 
@@ -42,18 +42,17 @@ else:
 
 
 def units(root: Path = ROOT) -> dict[str, str]:
-    """Return the six exact proposals with existing reviewed sandbox controls."""
+    """Return the four exact proposals with existing reviewed sandbox controls."""
     if not root.is_absolute() or any(ord(c) < CONTROL_SPACE or ord(c) == DELETE_CHARACTER for c in str(root)):
         raise ValueError("Unit source root must be absolute and contain no control characters")
     result: dict[str, str] = {}
     for job in JOBS:
         name = f"collective-{job}"
-        quality = job == "quality"
         replacements = {
             "ExecStart": f"/usr/bin/python3 -I -B {monitor.quote_unit(root / 'coordination_jobs.py')} --job {job}",
-            "TimeoutStartSec": "660" if quality else "90",
+            "TimeoutStartSec": "90",
             "ReadWritePaths": "%h/.local/state/collective/coordination",
-            "MemoryMax": "1G" if quality else "256M",
+            "MemoryMax": "256M",
             "Description": f"Collective {job} (bounded; no notifications or model turns)",
         }
         lines = [MARKER + " independent bounded jobs."]
@@ -66,11 +65,7 @@ def units(root: Path = ROOT) -> dict[str, str]:
             "Environment=PYTHONDONTWRITEBYTECODE=1",
         ]
         result[name + ".service"] = "\n".join(lines) + "\n"
-        schedule = (
-            "OnCalendar=daily"
-            if quality
-            else f"OnBootSec=3min\nOnUnitActiveSec={'10' if job == 'collaboration' else '30'}min"
-        )
+        schedule = f"OnBootSec=3min\nOnUnitActiveSec={'10' if job == 'collaboration' else '30'}min"
         result[name + ".timer"] = f"""{MARKER} one timer per named job.
 [Unit]
 Description=Collective {job} schedule (no automatic agent work)
@@ -94,7 +89,7 @@ def _originals(destination: Path, names: list[str]) -> dict[str, bytes | None]:
     originals: dict[str, bytes | None] = {}
     for name in names:
         try:
-            data = monitor.read_owned_unit_bytes(destination / name, limit=monitor.MAX_UNIT_BYTES)
+            data = monitor.read_owned_bytes(destination / name, limit=monitor.MAX_UNIT_BYTES)
         except FileNotFoundError:
             originals[name] = None
             continue
@@ -137,9 +132,8 @@ def _rollback(destination: Path, originals: dict[str, bytes | None], previous: d
 
 
 def install() -> dict[str, object]:
-    """Hold the exclusive installer lock before reading originals through receipt and rollback."""
-    state = monitor.private_dir(Path.home() / ".local/state/collective/coordination")
-    with monitor.locked_private_file(state / "installer.lock", blocking=False):
+    """Hold the installation lock shared with the heartbeat installer from originals through rollback."""
+    with monitor.installation_lock():
         return _install()
 
 

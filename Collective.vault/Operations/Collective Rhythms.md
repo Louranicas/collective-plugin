@@ -18,9 +18,10 @@ Luke asked on 2026-11-05 for recurring jobs for regular comms, collaboration, sy
 | Regular comms | **One notification gateway**: the existing heartbeat, 2-min flex tick | The only component that messages Luke. Change-only, journaled, and never resends an uncertain notice |
 | Collaboration | `collective-collaboration.timer`: 3 min after boot, then every 10 min, plus a random delay of up to 30 s | Bounded read-only metadata snapshot of agents, ring and task cards |
 | Cohesion | `collective-cohesion.timer`: 3 min after boot, then every 30 min, plus a random delay of up to 30 s | The same snapshot on a slower rhythm |
-| Quality | `collective-quality.timer`: daily, plus a random delay of up to 30 s | `tools/check.py` offline at exact pins (660 s for the service, 600 s for the command) |
 
-Each job writes a private receipt (0600 in a 0700 directory). Jobs send nothing, wake no one, start no model turns and retry nothing. The heartbeat alone alerts when a job receipt is failed, degraded, unknown or stale.
+Each job writes a private receipt (0600 in a 0700 directory). Jobs send nothing, wake no one, run no tests, start no model turns and retry nothing.
+
+A daily `quality` job that ran the gates unattended was part of the first candidate and was **removed before release** after the Vesper review: it ran mutable checkout tests with live `HOME` and Unix-socket access. Quality stays explicit: `tools/check.py`, the git hooks and protected CI. Daily quality automation is deliberately not shipped and no automatic quality result is claimed. The heartbeat alone alerts when a job receipt is failed, degraded, unknown or stale.
 
 ## What the jobs do not claim
 
@@ -31,7 +32,7 @@ Each job writes a private receipt (0600 in a 0700 directory). Jobs send nothing,
 
 ## Status (2026-11-05)
 
-The heartbeat is **paused** until host acceptance. The three job timers are **not yet installed**. Codex 3 will append the dated live acceptance. Live smoke runs gave `status: ok` for the collaboration and cohesion jobs (#623). The notice proof passed: one effect, and after reload an `unknown` notice became `submitted` with no resend (#621).
+The heartbeat is **paused** until host acceptance. The two job timers are **not yet installed**. Codex 3 will append the dated live acceptance. Live smoke runs gave `status: ok` for the collaboration and cohesion jobs (#623). The notice proof passed: one effect, and after reload an `unknown` notice became `submitted` with no resend (#621).
 
 ## History
 

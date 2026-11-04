@@ -25,7 +25,7 @@ UNSAFE_WRITE_MODE = 0o022
 
 class _Policy(Enum):
     PRIVATE_STATE = auto()
-    OWNED_UNIT = auto()
+    OWNED_FILE = auto()
 
 
 def _check_limit(limit: int) -> None:
@@ -41,7 +41,7 @@ def _check_parent(metadata: os.stat_result, policy: _Policy) -> None:
         if mode != PRIVATE_PARENT_MODE:
             raise ValueError("Private-state parent must have mode 0700")
     elif mode & UNSAFE_WRITE_MODE:
-        raise ValueError("Owned-unit parent must not be group or other writable")
+        raise ValueError("Owned-file parent must not be group or other writable")
 
 
 def _check_leaf(metadata: os.stat_result, policy: _Policy, limit: int) -> None:
@@ -52,7 +52,7 @@ def _check_leaf(metadata: os.stat_result, policy: _Policy, limit: int) -> None:
         if mode != PRIVATE_FILE_MODE:
             raise ValueError("Private-state file must have mode 0600")
     elif mode & UNSAFE_WRITE_MODE:
-        raise ValueError("Owned-unit file must not be group or other writable")
+        raise ValueError("Owned-file file must not be group or other writable")
     if metadata.st_size < 0 or metadata.st_size > limit:
         raise ValueError("File exceeds its byte limit")
 
@@ -106,17 +106,27 @@ def read_private_json(path: str | os.PathLike[str], *, limit: int = DEFAULT_LIMI
     Missing files and OS refusals remain FileNotFoundError/OSError. Unsafe policy,
     overflow, concurrent changes, invalid UTF-8 and invalid JSON raise ValueError.
     """
-    data = _read(path, _Policy.PRIVATE_STATE, limit)
+    return parse_json(_read(path, _Policy.PRIVATE_STATE, limit))
+
+
+def parse_json(data: str | bytes | bytearray) -> object:
+    """Parse untrusted JSON text; every malformed, non-UTF-8 or too-deep input raises ValueError.
+
+    This is the one JSON boundary for files and transport output, so parser recursion
+    limits surface as ordinary malformed data instead of escaping as RecursionError.
+    """
+    text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else data
     try:
-        return json.loads(data.decode("utf-8"))
+        return json.loads(text)
     except RecursionError as exc:
         raise ValueError("JSON nesting exceeds the supported parser depth") from exc
 
 
-def read_owned_unit_bytes(path: str | os.PathLike[str], *, limit: int = DEFAULT_LIMIT) -> bytes:
-    """Read bounded owned single-link unit bytes with no group/other write on file or parent.
+def read_owned_bytes(path: str | os.PathLike[str], *, limit: int = DEFAULT_LIMIT) -> bytes:
+    """Read bounded bytes from an owned single-link file with no group/other write on file or parent.
 
-    The unit policy permits readable modes such as 0644/0755 but never permits a
-    symlink leaf or symlink immediate parent. Ancestor paths remain caller trust.
+    Used for user units, job source hashing and mail-plan text input. Readable modes
+    such as 0644/0755 are permitted; a symlink leaf or symlink immediate parent is
+    never followed. Ancestor paths remain caller trust.
     """
-    return _read(path, _Policy.OWNED_UNIT, limit)
+    return _read(path, _Policy.OWNED_FILE, limit)

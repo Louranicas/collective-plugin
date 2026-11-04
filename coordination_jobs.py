@@ -1,4 +1,4 @@
-"""Bounded metadata and quality jobs; never send mail, wake agents or retry effects.
+"""Bounded metadata-only coordination jobs; never send mail, wake agents, run tests or retry effects.
 
 One invocation produces one private receipt. Ring observations are bounded,
 volatile transport evidence; owner names and replies are claims, not identity
@@ -31,9 +31,9 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parent
 MAX_OUTPUT = 2_000_000
 READ_TIMEOUT = 20.0
-QUALITY_TIMEOUT = 600.0
 PRIVATE_MODE = 0o600
-JOBS = ("collaboration", "cohesion", "quality")
+JOBS = ("collaboration", "cohesion")
+MAX_SOURCE_BYTES = 262144
 SOURCES = ("roster", "ring", "tasks")
 MAX_ROWS = 4096
 MAX_LABEL = 64
@@ -87,20 +87,16 @@ def _pipe_fd(pipe: IO[bytes] | None) -> int:
     return pipe.fileno()
 
 
-def _run(
-    argv: list[str], *, timeout: float, env: dict[str, str] | None = None, cwd: Path | None = None
-) -> CommandResult:
+def _run(argv: list[str], *, timeout: float) -> CommandResult:
     """Run fixed internal argv with bounded output and total duration."""
     output, errors = bytearray(), bytearray()
     deadline = time.monotonic() + timeout
     try:
-        with subprocess.Popen(  # noqa: S603 - internal fixed read/quality argv; no shell or caller command
+        with subprocess.Popen(  # noqa: S603 - internal fixed read argv; no shell or caller command
             argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=env,
-            cwd=cwd,
             start_new_session=True,
             umask=0o077,
         ) as proc:
@@ -153,7 +149,7 @@ def _source(name: str, session: str) -> tuple[list[JsonDict], JsonDict]:
     if outcome.status != "ok":
         return [], {"status": outcome.status, "count": 0}
     try:
-        value = json.loads(outcome.output.decode("utf-8"))
+        value: Any = private_files.parse_json(outcome.output)
         if isinstance(value, dict) and "result" in value:
             value = value["result"]
         rows = value.get(key) if isinstance(value, dict) and not value.get("error") else None
@@ -164,7 +160,7 @@ def _source(name: str, session: str) -> tuple[list[JsonDict], JsonDict]:
             count = value.get("evicted")
             metadata["evicted"] = count if type(count) is int and count >= 0 else None
             metadata["complete_history"] = False
-    except (UnicodeError, ValueError, RecursionError):
+    except ValueError:
         return [], {"status": "malformed", "count": 0}
     return rows, metadata
 
@@ -277,42 +273,6 @@ def _metadata_job(session: str) -> JsonDict:
     }
 
 
-def _quality_job(directory: Path) -> JsonDict:
-    cache = monitor.private_dir(directory / "quality-cache")
-    env = {**os.environ, "UV_OFFLINE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
-    gate_tools = directory / "gate-tools/bin"
-    env["PATH"] = str(gate_tools) + os.pathsep + os.environ.get("PATH", os.defpath)
-    for key, relative in {
-        "UV_CACHE_DIR": "uv",
-        "RUFF_CACHE_DIR": "ruff",
-        "MYPY_CACHE_DIR": "mypy",
-        "TMPDIR": "tmp",
-    }.items():
-        env[key] = str(monitor.private_dir(cache / relative))
-    env["COVERAGE_FILE"] = str(cache / "coverage")
-    checker_receipt = directory / "quality-check.json"
-    monitor.atomic(checker_receipt, b"{}")
-    outcome = _run(
-        [sys.executable, "-I", "-B", str(ROOT / "tools/check.py"), "--keep-going", "--receipt", str(checker_receipt)],
-        timeout=QUALITY_TIMEOUT,
-        env=env,
-        cwd=ROOT,
-    )
-    checker: object = None
-    with contextlib.suppress(OSError, ValueError):
-        checker = private_files.read_private_json(checker_receipt)
-    valid = isinstance(checker, dict) and checker.get("ok") is True
-    return {
-        "status": "ok" if outcome.status == "ok" and valid else "failed",
-        "command_status": outcome.status,
-        "exit_code": outcome.code,
-        "checker_report_valid": valid,
-        "checker_tree_sha256": checker.get("tree_sha256") if isinstance(checker, dict) else None,
-        "output_persisted": False,
-        "network": "offline dependency resolution only",
-    }
-
-
 @contextlib.contextmanager
 def _job_lock(path: Path) -> Iterator[bool]:
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, PRIVATE_MODE)
@@ -347,12 +307,14 @@ def run_job(job: str) -> JsonDict:
         if not session or ":" in session:
             raise ValueError("An explicit local session is required")
         started = time.monotonic()
-        result = _quality_job(directory) if job == "quality" else _metadata_job(session)
+        result = _metadata_job(session)
         receipt = {
             "schema": 1,
             "job": job,
             "generated_utc": dt.datetime.now(dt.UTC).isoformat(),
-            "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "source_sha256": hashlib.sha256(
+                private_files.read_owned_bytes(ROOT / "coordination_jobs.py", limit=MAX_SOURCE_BYTES)
+            ).hexdigest(),
             "duration_s": round(time.monotonic() - started, 3),
             **result,
         }

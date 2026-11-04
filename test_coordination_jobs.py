@@ -96,12 +96,6 @@ class JobBehavior(unittest.TestCase):
         self.input.write_text(json.dumps(self.data), encoding="utf-8")
         self.input.chmod(0o600)
 
-    def checker(self, program: str) -> Path:
-        root = self.home / "fake-source"
-        (root / "tools").mkdir(parents=True, exist_ok=True)
-        (root / "tools/check.py").write_text(program, encoding="utf-8")
-        return root
-
     def test_real_metadata_jobs_are_private_passive_and_explicit(self) -> None:
         for job in ("collaboration", "cohesion"):
             with self.subTest(job=job):
@@ -250,41 +244,47 @@ class JobBehavior(unittest.TestCase):
                 jobs.run_job("collaboration")
         self.assertFalse(self.log.exists())
 
-    def test_quality_runs_actual_checker_offline_with_private_caches(self) -> None:
-        root = self.checker(
-            "import json,os,pathlib,sys\n"
-            "assert '--keep-going' in sys.argv\n"
-            "assert os.environ['UV_OFFLINE']=='1'\n"
-            "expected=pathlib.Path(os.environ['XDG_STATE_HOME'])/'collective/coordination/gate-tools/bin'\n"
-            "assert os.environ['PATH'].split(os.pathsep)[0]==str(expected)\n"
-            "for key in ('UV_CACHE_DIR','RUFF_CACHE_DIR','MYPY_CACHE_DIR','TMPDIR'):\n"
-            " assert pathlib.Path(os.environ[key]).stat().st_mode&0o777==0o700\n"
-            "path=pathlib.Path(sys.argv[sys.argv.index('--receipt')+1])\n"
-            "path.write_text(json.dumps({'ok':True,'tree_sha256':'a'*64}))\n"
-            f"print({PRIVATE_TEXT!r})\n",
+    def test_quality_execution_is_not_a_job_and_cli_refuses_it(self) -> None:
+        self.assertEqual(jobs.JOBS, ("collaboration", "cohesion"))
+        with self.assertRaises(ValueError):
+            jobs.run_job("quality")
+        result = subprocess.run(  # noqa: S603 - fixed local interpreter and module under test
+            [sys.executable, "-I", "-B", str(Path(jobs.__file__)), "--job", "quality"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env={**os.environ, **self.env},
         )
-        with mock.patch.object(jobs, "ROOT", root):
-            receipt = jobs.run_job("quality")
-        self.assertEqual(receipt["status"], "ok")
-        self.assertEqual(receipt["checker_tree_sha256"], "a" * 64)
-        gate_tools = jobs.state_dir() / "gate-tools/bin"
-        if gate_tools.exists():
-            self.assertEqual(list(gate_tools.iterdir()), [])
-        self.assertTrue(receipt["checker_report_valid"])
-        self.assertFalse(receipt["output_persisted"])
-        self.assertNotIn(PRIVATE_TEXT, json.dumps(receipt))
-        self.assertEqual(stat.S_IMODE((jobs.state_dir() / "quality-check.json").stat().st_mode), 0o600)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid choice", result.stderr)
+        self.assertFalse(self.log.exists())
+        self.assertFalse((jobs.state_dir() / "quality.json").exists())
 
-    def test_quality_nonzero_missing_and_false_reports_remain_failed(self) -> None:
-        for program in (
-            "raise SystemExit(3)",
-            "print('checker emitted no receipt')",
-            "import pathlib,sys;pathlib.Path(sys.argv[-1]).write_text('{\"ok\":false}')",
-            "import pathlib,sys;pathlib.Path(sys.argv[-1]).write_text('[]')",
-        ):
-            root = self.checker(program)
-            with self.subTest(program=program), mock.patch.object(jobs, "ROOT", root):
-                self.assertEqual(jobs.run_job("quality")["status"], "failed")
+    def test_source_hash_fifo_fails_promptly_in_a_real_child_without_receipt(self) -> None:
+        root = self.home / "fifo-source"
+        root.mkdir(mode=0o755)
+        os.mkfifo(root / "coordination_jobs.py", 0o600)
+        program = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(jobs.__file__).parent)!r})\n"
+            "import pathlib, coordination_jobs as jobs\n"
+            f"jobs.ROOT = pathlib.Path({str(root)!r})\n"
+            "try:\n"
+            "    jobs.run_job('cohesion')\n"
+            "except ValueError:\n"
+            "    raise SystemExit(17)\n"
+        )
+        result = subprocess.run(  # noqa: S603 - fixed local interpreter over a private fixture
+            [sys.executable, "-I", "-B", "-c", program],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env={**os.environ, **self.env},
+        )
+        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assertFalse((jobs.state_dir() / "cohesion.json").exists())
 
     def test_real_process_limits_and_deadline(self) -> None:
         for program in (
@@ -357,7 +357,8 @@ class CoordinationInstaller(unittest.TestCase):
 
     def test_unit_semantics_are_sandboxed_and_keep_existing_gateway(self) -> None:
         proposed = installer.units()
-        self.assertEqual(len(proposed), 6)
+        self.assertEqual(len(proposed), 4)
+        self.assertEqual(installer.JOBS, ("collaboration", "cohesion"))
         self.assertNotIn("collective-heartbeat.service", proposed)
         for job in installer.JOBS:
             text = proposed[f"collective-{job}.service"]
@@ -370,14 +371,12 @@ class CoordinationInstaller(unittest.TestCase):
             self.assertIn(f"--job {job}", settings["ExecStart"])
             timer = proposed[f"collective-{job}.timer"]
             timer_settings = dict(line.split("=", 1) for line in timer.splitlines() if "=" in line)
-            if job == "quality":
-                self.assertEqual(timer_settings["OnCalendar"], "daily")
-                self.assertGreater(int(settings["TimeoutStartSec"]), jobs.QUALITY_TIMEOUT)
-            else:
-                self.assertEqual(timer_settings["OnUnitActiveSec"], "10min" if job == "collaboration" else "30min")
+            self.assertNotIn("OnCalendar", timer_settings)
+            self.assertEqual(settings["TimeoutStartSec"], "90")
+            self.assertEqual(timer_settings["OnUnitActiveSec"], "10min" if job == "collaboration" else "30min")
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd consumer unavailable")
-    def test_real_systemd_consumer_accepts_all_six_proposals(self) -> None:
+    def test_real_systemd_consumer_accepts_all_four_proposals(self) -> None:
         staged = self.home / "staged"
         staged.mkdir()
         paths = []
@@ -430,7 +429,7 @@ class CoordinationInstaller(unittest.TestCase):
                 return 0 if argv[-1] == "collective-collaboration.timer" else 3
             if "is-active" in argv:
                 return 0 if argv[-1] == "collective-cohesion.timer" else 3
-            if "enable" in argv and argv[-1] == "collective-quality.timer":
+            if "enable" in argv and argv[-1] == "collective-cohesion.timer":
                 raise install_monitor.CollectiveError("fixture activation refusal")
             return 0
 
@@ -447,14 +446,11 @@ class CoordinationInstaller(unittest.TestCase):
         self.assertIn(("enable", "collective-collaboration.timer"), rollback_calls)
         self.assertIn(("disable", "collective-cohesion.timer"), rollback_calls)
         self.assertIn(("start", "collective-cohesion.timer"), rollback_calls)
-        self.assertIn(("stop", "collective-quality.timer"), rollback_calls)
-        self.assertIn(("disable", "collective-quality.timer"), rollback_calls)
 
     def test_effect_then_error_restores_true_and_false_timer_states(self) -> None:
         prior = {
             "collective-collaboration.timer": {"enabled": False, "active": False},
-            "collective-cohesion.timer": {"enabled": True, "active": False},
-            "collective-quality.timer": {"enabled": True, "active": True},
+            "collective-cohesion.timer": {"enabled": True, "active": True},
         }
         current = {name: dict(state) for name, state in prior.items()}
         failed = False
@@ -471,7 +467,7 @@ class CoordinationInstaller(unittest.TestCase):
                 current[timer]["enabled"] = verb == "enable"
             if verb in {"start", "stop"} or (verb == "enable" and "--now" in argv):
                 current[timer]["active"] = verb != "stop"
-            if verb == "enable" and timer == "collective-quality.timer" and not failed:
+            if verb == "enable" and timer == "collective-cohesion.timer" and not failed:
                 # Model a backend that mutates the named timer before reporting failure.
                 current[timer] = {"enabled": False, "active": False}
                 failed = True

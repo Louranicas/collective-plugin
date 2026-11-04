@@ -32,11 +32,12 @@ CI on GitHub and GitLab runs the same command on Python 3.12, 3.13 and 3.14. **E
 |---|---|
 | F0 | `SOURCES` in `tools/check.py` lists exactly the top-level runtime modules: a listed file that is missing, or a non-test `*.py` that is not listed, fails. A new module cannot skip the gates |
 | F1 | No `os.system`, `os.popen`, `eval`, `exec`, `compile`, `pickle`, `marshal` or `tempfile.mktemp`, and no `shell=` other than a literal `False` |
-| F2 | Each module spawns processes from **one audited door**: `collective.run`, `heartbeat.run`, `install_monitor.command` |
+| F2 | Each module spawns processes from **one audited door**: `collective.run`, `heartbeat.run`, `install_monitor.command`, `coordination_jobs._run` |
 | F3 | No write-tier-W5 effect strings: `send-keys`, `send-text`, `agent.prompt`, `set-config`, `apply-config`, `set-pane-grants`, `plugin.enable` and others |
 | F4 | `chmod` modes never grant group or other access |
 | F5 | Sockets are `AF_UNIX` only. The collective never opens a network socket |
 | F6 | Every `os.open` must **provably** carry `O_NONBLOCK`, `O_CREAT\|O_EXCL` or `O_DIRECTORY`. Opening an existing path otherwise blocks forever on a FIFO (M1). Write the flags as one `os.O_* \| ...` expression or one plain assignment before the call; reassignment, `\|=`, parameters, loop variables and any operator other than `\|` prove nothing, and a conditional counts only if both branches set the flag. Eight planted negative controls guard the analyser. Open non-blocking, `fstat` for `S_ISREG`, then `set_blocking(True)`. F6 is a **policy guard on open calls**, not proof that every filesystem operation is bounded |
+| F7 | Runtime modules never call the high-level opens `open`, `io.open`, `.open()`, `.read_bytes()`, `.read_text()`, `.write_bytes()` or `.write_text()`: they cannot carry `O_NONBLOCK`. Read through the `private_files` readers or `os.open` (F6). Five planted negative controls guard it. It sees only calls spelled this way; opens inside library internals (such as `importlib` loading a sibling module) are outside it |
 
 ## Rules for changing code
 
@@ -52,5 +53,5 @@ CI on GitHub and GitLab runs the same command on Python 3.12, 3.13 and 3.14. **E
 2. **No blanket suppressions.** A per-line `# noqa: CODE - reason` or `# type: ignore[code]` needs a reason and reviewer approval. Adding an ignore to `pyproject.toml` needs a reason in the same diff.
 3. **Builder ≠ judge.** A change is accepted when someone other than the author has run the gates and planted one breach that a test catches for the named reason.
 4. **Intent before effect.** Persist intent before any external effect, treat timeouts as *unknown* rather than failed, and never retry an effect blindly.
-5. **Stdlib only at runtime.** `dependencies = []` is deliberate. Gate tools are pinned in CI and `tools/check.py`.
+5. **Stdlib only at runtime.** `dependencies = []` is deliberate. Gate tools are pinned in CI and `tools/check.py`. `tools/check.py` uses a PATH tool only when its `--version` reports the exact pin and fails closed otherwise; with no PATH tool it runs the pin through `uv tool run --from`. It does not verify tool artifact hashes.
 6. **Commits** say what changed and why, and cite the card (`t13: …`). End them with the co-author trailer of the agent that wrote them.

@@ -2,7 +2,7 @@
 
 Return to [[Home]] · [[Architecture/Communication layers]] · [[Architecture/Write lifecycle]] · [[Architecture/Runtime and recovery]]
 
-Twelve Mermaid blocks in the architecture and operations notes were rendered through the installed `tuios mermaid` command on 2026-11-04. The resulting SVGs were parsed as XML; the overview PNG was visually inspected. This validates these exports, not Obsidian's own renderer or every future edit of a diagram.
+Twelve Mermaid blocks in the architecture and operations notes were rendered through the installed `tuios mermaid` command on 2026-11-04; Scheduler Runbook diagrams 1 and 4 were re-rendered the same way on 2026-11-05 after the job and notice-lifecycle changes. The resulting SVGs were parsed as XML; the overview PNG was visually inspected. This validates these exports, not Obsidian's own renderer or every future edit of a diagram.
 
 `render-receipt.json` records the source note, diagram number, output and output SHA-256. Regenerate the corresponding export after a source diagram changes.
 

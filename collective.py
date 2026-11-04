@@ -37,7 +37,8 @@ if _files_spec is None or _files_spec.loader is None:
     raise ImportError("Cannot load reviewed private file readers")
 _private_files = importlib.util.module_from_spec(_files_spec)
 _files_spec.loader.exec_module(_private_files)
-read_owned_unit_bytes = _private_files.read_owned_unit_bytes
+read_owned_bytes = _private_files.read_owned_bytes
+parse_json = _private_files.parse_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -370,7 +371,7 @@ def locked_private_file(path: str | os.PathLike[str], *, blocking: bool = True) 
 
 def _journal_rows(f: IO[str]) -> list[JsonDict]:
     try:
-        rows = [json.loads(line) for line in f if line.strip()]
+        rows = [parse_json(line) for line in f if line.strip()]
     except ValueError as exc:
         msg = "Journal is corrupt; refuse writes until reviewed"
         raise CollectiveError(msg) from exc
@@ -578,7 +579,7 @@ def _parse_tool_result(
     if returncode:
         envelope: object = None
         with contextlib.suppress(ValueError):
-            envelope = json.loads(stdout or errors.decode("utf-8", errors="replace"))
+            envelope = parse_json(stdout or errors.decode("utf-8", errors="replace"))
         code = _refusal_code(envelope)
         if code is not None:
             msg = f"{Path(argv[0]).name}: {code} (exit {returncode})"
@@ -588,7 +589,7 @@ def _parse_tool_result(
     if not as_json:
         return stdout
     try:
-        value = json.loads(stdout)
+        value = parse_json(stdout)
     except ValueError as exc:
         # The process ran and exited 0, so any write it carried may already have happened: UNKNOWN, not refused.
         msg = "Tool returned non-JSON data"
@@ -762,7 +763,7 @@ class Backend:
                 _check_native_peer(s)
                 s.sendall((canonical(request) + "\n").encode())
                 response = _recv_frame(s, deadline)
-            value = json.loads(response.split(b"\n", 1)[0])
+            value = parse_json(response.split(b"\n", 1)[0])
         except (OSError, ValueError) as exc:
             msg = "Herdr Unix socket unavailable or incompatible"
             raise CollectiveError(msg) from exc
@@ -1089,8 +1090,8 @@ def parser() -> argparse.ArgumentParser:
 
 def _plan_command(args: argparse.Namespace, backend: Backend) -> JsonDict:
     if args.command == "mail-plan":
-        with Path(args.text_file).open(encoding="utf-8") as f:
-            text = f.read(MAX_BODY + 1)
+        raw = read_owned_bytes(args.text_file, limit=2 * MAX_BODY).decode("utf-8")
+        text = raw.replace("\r\n", "\n").replace("\r", "\n")
         plan = make_mail_plan(
             backend.snapshot(args.session),
             args.session,

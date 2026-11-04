@@ -27,6 +27,7 @@ from typing import Any, override
 from unittest import mock
 
 import collective as core
+import coordination_jobs
 import heartbeat
 import install_coordination_jobs as coordination_installer
 import install_monitor as installer
@@ -647,8 +648,10 @@ class InstallerTransactionRegressions(unittest.TestCase):
             entries[str(path.relative_to(home))] = (mode, value)
         return entries
 
-    def exercise(self, module: Any) -> None:
+    def exercise(self, module: Any, nested_module: Any = None) -> None:
+        nested_module = nested_module or module
         monitor = module.monitor if module is coordination_installer else module
+        nested_monitor = nested_module.monitor if nested_module is coordination_installer else nested_module
         with tempfile.TemporaryDirectory(prefix="collective-installer-lock-") as tmp:
             home = Path(tmp)
             destination = home / ".config/systemd/user"
@@ -664,7 +667,6 @@ class InstallerTransactionRegressions(unittest.TestCase):
                 {
                     "collective-collaboration.timer": {"enabled": True, "active": False},
                     "collective-cohesion.timer": {"enabled": False, "active": True},
-                    "collective-quality.timer": {"enabled": True, "active": True},
                 }
                 if module is coordination_installer
                 else {installer.TIMER: {"enabled": True, "active": False}}
@@ -688,8 +690,8 @@ class InstallerTransactionRegressions(unittest.TestCase):
                 if verb == "enable" and "--now" in argv and not nested:
                     nested = True
                     before, count = self.filesystem(home), len(calls)
-                    with self.assertRaises(monitor.CollectiveError):
-                        module.install()
+                    with self.assertRaisesRegex(nested_monitor.CollectiveError, "already running"):
+                        nested_module.install()
                     self.assertEqual(self.filesystem(home), before)
                     self.assertEqual(len(calls), count)
                     raise monitor.CollectiveError("outer activation failure after nested refusal")
@@ -708,6 +710,7 @@ class InstallerTransactionRegressions(unittest.TestCase):
             with (
                 mock.patch.object(Path, "home", return_value=home),
                 mock.patch.object(monitor, "command", side_effect=command),
+                mock.patch.object(nested_monitor, "command", side_effect=command),
             ):
                 with self.assertRaisesRegex(monitor.CollectiveError, "outer activation failure"):
                     module.install()
@@ -721,6 +724,10 @@ class InstallerTransactionRegressions(unittest.TestCase):
 
     def test_coordination_installer_refuses_concurrent_entry_until_rollback_completes(self):
         self.exercise(coordination_installer)
+
+    def test_installers_share_one_transaction_lock_in_both_directions(self):
+        self.exercise(coordination_installer, installer)
+        self.exercise(installer, coordination_installer)
 
 
 class CoverageGateTests(unittest.TestCase):
@@ -1029,7 +1036,7 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.assertEqual(heartbeat.main(), 0)
         self.assertEqual(self.send.call_count, 1)
 
-    def test_legacy_uncertain_notice_acknowledges_active_alerts_then_releases_hold(self) -> None:
+    def test_legacy_unknown_notice_holds_until_operator_release_without_acknowledging_alerts(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
         memory: dict[str, Any] = heartbeat.load("memory.json", {})
         memory["notice_failures"], memory["notice_attempt"] = 1, self.clock.return_value
@@ -1037,20 +1044,44 @@ class HeartbeatLifecycle(unittest.TestCase):
         memory.pop("notice_legacy_hold", None)
         heartbeat.save("memory.json", memory)
         self.peers.return_value = {"fixture-peer": False}
-        self.clock.return_value += 120
-        self.assertEqual(heartbeat.main(), 0)
-        self.send.assert_not_called()
+        for _ in range(2):
+            self.clock.return_value += 3600
+            self.assertEqual(heartbeat.main(), 0)
+            self.send.assert_not_called()
+            memory = heartbeat.load("memory.json", {})
+            self.assertTrue(memory["notice_legacy_hold"])
+            self.assertNotIn("peer:fixture-peer:False", memory["sent"])
+            self.assertIn("peer:fixture-peer:False", memory["pending"])
+            self.assertEqual(memory["notice_issue"], heartbeat.LEGACY_HOLD_ISSUE)
+            board: dict[str, Any] = heartbeat.load("heartbeat.json", {})
+            self.assertTrue(board["notifications"]["legacy_unknown_hold"])
+        held: dict[str, Any] = heartbeat.load("memory.json", {})
+        with (
+            mock.patch.object(sys, "argv", ["heartbeat.py", "--release-legacy-notice-hold"]),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(heartbeat.main(), 0)
+        released = json.loads(output.getvalue())
+        self.assertEqual(released["released"], True)
+        self.assertEqual(released["acknowledged_alerts"], 0)
+        backup = Path(released["backup"])
+        self.assertEqual(backup.parent, self.state)
+        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+        self.assertEqual(heartbeat.load(backup.name, {}), held)
         memory = heartbeat.load("memory.json", {})
         self.assertFalse(memory["notice_legacy_hold"])
-        self.assertIn("peer:fixture-peer:False", memory["sent"])
-        self.assertNotIn("peer:fixture-peer:False", memory["pending"])
-        self.clock.return_value += 3600
-        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(memory["sent"], held["sent"])
         self.send.assert_not_called()
-        self.peers.return_value = {"fixture-peer": True}
         self.clock.return_value += 120
         self.assertEqual(heartbeat.main(), 0)
         self.assertEqual(self.send.call_count, 1)
+        self.assertIn("offline", self.send.call_args.args[0][-1])
+        with (
+            mock.patch.object(sys, "argv", ["heartbeat.py", "--release-legacy-notice-hold"]),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(json.loads(output.getvalue())["released"], False)
 
     def test_transition_survives_crash_after_pre_send_save(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
@@ -2062,7 +2093,7 @@ class CoordinationReceiptObservation(unittest.TestCase):
 
     def fresh(self) -> None:
         self.write("installer", {"status": "installed", "generated_utc": self.stamp(self.now - 400)})
-        for job in ("collaboration", "cohesion", "quality"):
+        for job in ("collaboration", "cohesion"):
             self.write(job, {"schema": 1, "job": job, "status": "ok", "generated_utc": self.stamp(self.now - 10)})
 
     def test_absent_installer_is_not_installed_and_first_run_grace_is_explicit(self):
@@ -2086,7 +2117,7 @@ class CoordinationReceiptObservation(unittest.TestCase):
             self.assertEqual(alerts, [])
             jobs = observed["jobs"]
             assert isinstance(jobs, dict)
-            self.assertEqual(set(jobs), {"collaboration", "cohesion", "quality"})
+            self.assertEqual(set(jobs), {"collaboration", "cohesion"})
             self.assertTrue(all(row["status"] == "ok" and not row["stale"] for row in jobs.values()))
             self.assertIn("do not prove", str(observed["meaning"]))
             command.assert_not_called()
@@ -2113,7 +2144,7 @@ class CoordinationReceiptObservation(unittest.TestCase):
                     if case == "future":
                         value["generated_utc"] = self.stamp(self.now + 3600)
                     if case == "wrong-job":
-                        value["job"] = "quality"
+                        value["job"] = "cohesion"
                     if case == "bool-schema":
                         value["schema"] = True
                     if case == "stale":
@@ -2125,15 +2156,14 @@ class CoordinationReceiptObservation(unittest.TestCase):
                     self.assertEqual([key for key, _ in alerts], ["jobs:collaboration"])
                     command.assert_not_called()
 
-    def test_daily_quality_missing_receipt_waits_for_first_due_time_then_becomes_unknown(self):
+    def test_missing_receipt_waits_only_for_start_grace_then_becomes_unknown(self):
         self.now = 1800000000.0
         self.fresh()
-        (self.directory / "quality.json").unlink()
-        first_deadline = 25 * 3600 + 660 + 30
+        (self.directory / "cohesion.json").unlink()
         for install_age, expected in (
-            (600, "awaiting-first-run"),
-            (first_deadline - 1, "awaiting-first-run"),
-            (first_deadline + 1, "unknown"),
+            (10, "awaiting-first-run"),
+            (heartbeat.JOB_START_GRACE_S - 1, "awaiting-first-run"),
+            (heartbeat.JOB_START_GRACE_S + 1, "unknown"),
         ):
             with self.subTest(install_age=install_age):
                 self.write("installer", {"status": "installed", "generated_utc": self.stamp(self.now - install_age)})
@@ -2141,21 +2171,32 @@ class CoordinationReceiptObservation(unittest.TestCase):
                     observed, alerts = heartbeat.coordination_status(self.now)
                     jobs = observed["jobs"]
                     assert isinstance(jobs, dict)
-                    self.assertEqual(jobs["quality"]["status"], expected)
-                    self.assertEqual([key for key, _ in alerts], ["jobs:quality"] if expected == "unknown" else [])
+                    self.assertEqual(jobs["cohesion"]["status"], expected)
+                    self.assertEqual([key for key, _ in alerts], ["jobs:cohesion"] if expected == "unknown" else [])
                     command.assert_not_called()
 
-    def test_malformed_first_quality_receipt_is_not_hidden_by_initial_grace(self):
+    def test_malformed_first_receipt_is_not_hidden_by_start_grace(self):
         self.fresh()
         self.write("installer", {"status": "installed", "generated_utc": self.stamp(self.now - 10)})
-        (self.directory / "quality.json").write_text("not-json", encoding="utf-8")
+        (self.directory / "cohesion.json").write_text("[" * 60000, encoding="utf-8")
+        (self.directory / "cohesion.json").chmod(0o600)
         with mock.patch.object(heartbeat, "run") as command:
             observed, alerts = heartbeat.coordination_status(self.now)
             jobs = observed["jobs"]
             assert isinstance(jobs, dict)
-            self.assertEqual(jobs["quality"]["status"], "unknown")
-            self.assertEqual([key for key, _ in alerts], ["jobs:quality"])
+            self.assertEqual(jobs["cohesion"]["status"], "unknown")
+            self.assertEqual([key for key, _ in alerts], ["jobs:cohesion"])
             command.assert_not_called()
+
+    def test_leftover_quality_receipt_is_not_monitored_as_job_health(self):
+        self.fresh()
+        self.write("quality", {"schema": 1, "job": "quality", "status": "failed", "generated_utc": "bad"})
+        observed, alerts = heartbeat.coordination_status(self.now)
+        self.assertEqual(observed["status"], "observed")
+        self.assertEqual(alerts, [])
+        jobs = observed["jobs"]
+        assert isinstance(jobs, dict)
+        self.assertEqual(set(jobs), {"collaboration", "cohesion"})
 
 
 class NativeFramingRealSocketRegressions(unittest.TestCase):
@@ -2322,3 +2363,153 @@ class NativeFramingRealSocketRegressions(unittest.TestCase):
                 self.assertIsNone(result)
                 self.assertGreater(elapsed, 0.10)
                 self.assertLess(elapsed, 0.8)
+
+
+DEEP_JSON = "[" * 200000
+
+
+class TransportJsonDepthRegressions(unittest.TestCase):
+    """Parser recursion at every transport boundary maps to the public unknown/unavailable outcome."""
+
+    def test_heartbeat_reads_and_notice_outcome_are_unknown_never_refused_or_submitted(self) -> None:
+        for rc in (0, 1):
+            with self.subTest(rc=rc):
+                self.assertEqual(heartbeat.notice_result(rc, DEEP_JSON), ("unknown", None))
+        with mock.patch.object(heartbeat, "run", return_value=(0, DEEP_JSON)):
+            self.assertIsNone(heartbeat.agents())
+            self.assertEqual(heartbeat.peers(), {})
+            self.assertIsNone(heartbeat.notice_ring_snapshot())
+            active, reasons = heartbeat.activity([])
+            self.assertTrue(active)
+            self.assertIn("mail-unknown", reasons)
+            alerts: list[tuple[str, str]] = []
+            self.assertIsNone(heartbeat.ring_alert(heartbeat.memory_state({}), alerts))
+            self.assertEqual(alerts, [])
+
+    def test_collective_tool_output_is_uncertain_and_journal_is_refused(self) -> None:
+        for rc in (0, 1):
+            with self.subTest(rc=rc), self.assertRaises(core.TransportUncertain):
+                core._parse_tool_result(["tuios"], rc, bytearray(DEEP_JSON.encode()), bytearray(), as_json=True)
+        with self.assertRaisesRegex(core.CollectiveError, "Journal is corrupt"):
+            core._journal_rows(io.StringIO(DEEP_JSON + "\n"))
+
+    def test_coordination_source_is_malformed_without_rows(self) -> None:
+        outcome = coordination_jobs.CommandResult("ok", 0, DEEP_JSON.encode())
+        with mock.patch.object(coordination_jobs, "_run", return_value=outcome):
+            self.assertEqual(coordination_jobs._source("roster", "fixture"), ([], {"status": "malformed", "count": 0}))
+
+
+class MailPlanTextFileRegressions(unittest.TestCase):
+    """The mail-plan body is read through the bounded owned-file reader in a real child process."""
+
+    def plan(self, text_file: Path, output: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 - fixed local interpreter and CLI under test
+            [
+                sys.executable,
+                "-I",
+                "-B",
+                str(Path(core.__file__)),
+                "--json",
+                "mail-plan",
+                "--session",
+                "work",
+                "--sender",
+                SENDER,
+                "--to",
+                RECIPIENT,
+                "--subject",
+                "fixture",
+                "--text-file",
+                str(text_file),
+                "--output",
+                str(output),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+            env={**os.environ, "TUIOS_BIN": str(text_file.parent / "absent-tuios")},
+        )
+
+    def test_owned_fifo_text_file_fails_promptly_without_plan_or_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fifo, output = root / "body.fifo", root / "plan.json"
+            os.mkfifo(fifo, 0o600)
+            started = time.monotonic()
+            result = self.plan(fifo, output)
+            self.assertLess(time.monotonic() - started, 15)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertEqual(json.loads(result.stderr)["effect"], "No automatic retry")
+            self.assertFalse(output.exists())
+
+    def test_oversize_invalid_utf8_and_writable_bodies_are_refused_before_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, data, mode in (
+                ("oversize", b"x" * (2 * core.MAX_BODY + 1), 0o600),
+                ("invalid", b"\xff\xfe", 0o600),
+                ("writable", b"body", 0o666),
+            ):
+                with self.subTest(name=name):
+                    body, output = root / name, root / f"{name}.plan"
+                    body.write_bytes(data)
+                    body.chmod(mode)
+                    backend = mock.Mock()
+                    with (
+                        mock.patch.object(core, "Backend", return_value=backend),
+                        contextlib.redirect_stdout(io.StringIO()),
+                        contextlib.redirect_stderr(io.StringIO()),
+                    ):
+                        status = core.main(
+                            [
+                                "mail-plan",
+                                "--session",
+                                "work",
+                                "--sender",
+                                SENDER,
+                                "--to",
+                                RECIPIENT,
+                                "--subject",
+                                "fixture",
+                                "--text-file",
+                                str(body),
+                                "--output",
+                                str(output),
+                            ]
+                        )
+                    self.assertEqual(status, 2)
+                    backend.snapshot.assert_not_called()
+                    self.assertFalse(output.exists())
+
+    def test_crlf_body_keeps_universal_newline_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            body, output = root / "body.txt", root / "plan.json"
+            body.write_bytes("line one\r\nline two\rline three — ok\n".encode())
+            backend = mock.Mock()
+            backend.snapshot.return_value = snapshot()
+            with (
+                mock.patch.object(core, "Backend", return_value=backend),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                status = core.main(
+                    [
+                        "mail-plan",
+                        "--session",
+                        "work",
+                        "--sender",
+                        SENDER,
+                        "--to",
+                        RECIPIENT,
+                        "--subject",
+                        "fixture",
+                        "--text-file",
+                        str(body),
+                        "--output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(status, 0)
+            plan = core.read_private_json(output)
+            self.assertEqual(plan["payload"]["text"], "line one\nline two\nline three — ok\n")

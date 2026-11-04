@@ -230,6 +230,18 @@ The private raw routing and runtime receipts remain local. The main merges, GitL
 
 **Lesson:** the tuios `draft_held` false positive on an empty placeholder held both Codex panes' mail-wake queued for about 7 hours. A read-only screen check confirmed the input boxes were empty, and an `ask-agent` nudge (at Luke's request) woke both panes.
 
+### Reliability iteration test evidence (`feat/collective-reliability`, dated 2026-11-05)
+
+Each count belongs to one revision; none is a later revision's result.
+
+| Revision | Evidence | Status |
+|---|---|---|
+| `f21a331` (released `main`) | 107 test methods; 9/9 gates and 107 tests OK in a fresh clone (see above) | Historical release evidence |
+| `fe74d3e` (initial reliability candidate) | 201 test methods. The private generated QA sandbox recorded 199 tests and 11/11 gates passing before the final first-run-grace regressions were added | Historical candidate evidence; it included the later-removed daily quality job |
+| Review-fix revision after `2f555b6` | 212 test methods; `python3 -m unittest` over all five test modules ran 212 tests, OK, 1 skipped (`systemd-analyze` absent in the review sandbox) | Local review-phase measurement only. The pipeline's own gate run and the protected Python 3.12/3.13/3.14 CI are the authoritative results and are not recorded here in advance |
+
+The daily quality job, its offline gate-tool provisioning and its receipt consumer were removed in the review-fix revision, so no automatic quality evidence exists for any revision. Host status: on 2026-11-05 the heartbeat was paused for this iteration and the two job timers were not installed. Actual host acceptance is recorded later, after it happens.
+
 ## Research and gate provenance (2026-11-05, zero-touch hive phase)
 
 Pointers only; no research corpus is copied into the vault. Library sources were treated as data.

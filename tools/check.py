@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import hashlib
 import ipaddress
 import json
@@ -76,6 +77,11 @@ FORBIDDEN_VERBS = (
     "plugin.enable",
     "plugin.link",
 )
+# High-level opens cannot carry O_NONBLOCK, so runtime code must use os.open or the audited
+# private_files readers. This covers calls spelled open/io.open/.open/.read_*/.write_*; opens
+# inside library internals (for example importlib loading a sibling module) are not visible here.
+PATH_OPEN_CALLS = {"open", "io.open", "builtins.open"}
+PATH_OPEN_METHODS = {"open", "read_bytes", "read_text", "write_bytes", "write_text"}
 # Opening an existing path without one of these can block forever on a FIFO (M1, 2026-11-05).
 NONBLOCKING_FLAGS = {"O_NONBLOCK", "O_EXCL", "O_DIRECTORY"}
 SUBPROCESS_FNS = {"run", "Popen", "call", "check_call", "check_output"}
@@ -216,6 +222,13 @@ class _Fitness(ast.NodeVisitor):
                 self._add("F4-private-modes", node, f"chmod {oct(mode.value)} grants group/other access")
         if name == "os.open":
             self._check_open(node)
+        elif name in PATH_OPEN_CALLS or (isinstance(node.func, ast.Attribute) and node.func.attr in PATH_OPEN_METHODS):
+            self._add(
+                "F7-path-open",
+                node,
+                f"{name}: a high-level open can block forever on a FIFO; use "
+                "private_files readers or os.open with O_NONBLOCK",
+            )
         if name == "socket.socket" and node.args:
             fam = _dotted(node.args[0])
             if fam != "socket.AF_UNIX":
@@ -246,6 +259,7 @@ PLANTED = {
     "F6-blocking-open": (
         "import os\ndef read(p):\n    flags = os.O_RDONLY | os.O_NOFOLLOW\n    return os.open(p, flags)\n"
     ),
+    "F7-path-open": "from pathlib import Path\ndef read(p):\n    return Path(p).read_bytes()\n",
 }
 # Snippets every rule must accept (guards against over-firing).
 ACCEPTED = (
@@ -274,6 +288,15 @@ F6_NEGATIVE = {
     "excl-without-creat": "import os\ndef f(p):\n    return os.open(p, os.O_RDONLY | os.O_EXCL)\n",
     "parameter": "import os\ndef f(p, fl=os.O_NONBLOCK):\n    return os.open(p, fl)\n",
     "loop-rebound": ("import os\ndef f(ps):\n    for fl in (os.O_NONBLOCK, os.O_RDONLY):\n        os.open(ps, fl)\n"),
+}
+
+# Negative controls: every high-level spelling of an existing-path open must fire F7.
+F7_NEGATIVE = {
+    "builtin-open": "def f(p):\n    with open(p) as fh:\n        return fh.read()\n",
+    "io-open": "import io\ndef f(p):\n    return io.open(p, 'rb')\n",
+    "path-open": "from pathlib import Path\ndef f(p):\n    return Path(p).open(encoding='utf-8')\n",
+    "read-text": "def f(p):\n    return p.read_text()\n",
+    "write-bytes": "def f(p):\n    p.write_bytes(b'x')\n",
 }
 
 # ---------------------------------------------------------------- hygiene (publication safety)
@@ -514,10 +537,20 @@ class Gate:
     detail: list[str] = field(default_factory=list)
 
 
+@functools.cache
 def tool(name: str) -> list[str]:
-    """Prefer a tool already on PATH (CI installs pinned versions); else run the pinned one through uv."""
-    if shutil.which(name):
-        return [name]
+    """Return the exact pinned tool: a PATH copy whose --version reports the pin, else uv's pinned run.
+
+    A PATH tool reporting any other version fails closed instead of silently gating with it.
+    """
+    found = shutil.which(name)
+    if found:
+        rc, out = run([found, "--version"])
+        pinned = PINS[name].split("==", 1)[1]
+        if rc != 0 or pinned not in re.findall(r"\d+(?:\.\d+)+", out):
+            msg = f"{name} on PATH is not {PINS[name]}; install the pin or remove it from PATH"
+            raise SystemExit(msg)
+        return [found]
     uv = shutil.which("uv")
     if uv:
         return [uv, "tool", "run", "--from", PINS[name], name]
@@ -556,9 +589,10 @@ def g_selftest(g: Gate) -> None:
     g.detail.append(f"H-home-path: {'fires' if HYGIENE['home-path'].search(planted_home) else 'DID NOT FIRE'}")
     doc_ok = not _is_public_ipv4("192.0.2.10")
     g.detail.append(f"documentation range allowed: {'yes' if doc_ok else 'NO'}")
-    for case, snippet in F6_NEGATIVE.items():
-        fired = {f.rule for f in fitness_scan("collective.py", snippet)}
-        g.detail.append(f"F6 {case}: {'fires' if 'F6-blocking-open' in fired else 'DID NOT FIRE'}")
+    for rule, controls in (("F6-blocking-open", F6_NEGATIVE), ("F7-path-open", F7_NEGATIVE)):
+        for case, snippet in controls.items():
+            fired = {f.rule for f in fitness_scan("collective.py", snippet)}
+            g.detail.append(f"{rule[:2]} {case}: {'fires' if rule in fired else 'DID NOT FIRE'}")
     for case, refused in _diagram_controls().items():
         if case == "accepted":
             g.detail.append(f"accepted diagram receipt passes: {'NO' if refused else 'yes'}")

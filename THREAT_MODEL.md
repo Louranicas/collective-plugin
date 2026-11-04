@@ -36,9 +36,9 @@ Owner: collective-claude (card Q1). Scope: `local.collective` (the collective.py
 | Plugin code changing after approval | tuios approval is bound to the **manifest** only, so commits are reviewed and pinned | CONTRIBUTING; branch protection |
 | Infrastructure leakage | Publish-set scan for IPs, keys, tokens and emails | `hygiene` gate |
 | Scheduled jobs doing work or spamming | Jobs are metadata-only and descriptive: no mail, wakes, model turns or retries. Only the heartbeat notifies. Each job has its own lock, timeout and memory bound | `coordination_jobs.py` tests; F2 door `_run` |
-| A lost or duplicated notice | A journaled intent comes before dispatch. An uncertain outcome holds its keys and is never resent. Reconciliation needs exactly one matching ring entry in the same boot | `notice_state` tests (pure transitions) |
-| Quality job fetching code | `UV_OFFLINE=1`, pinned tools, private caches; no fixes or push; output not persisted | Quality-job tests |
-| Installer clobbering units | Exclusive lock, `systemd-analyze verify`, backups, a refusal for unmanaged units, rollback of each timer's enabled and active state | Installer tests |
+| A lost or duplicated notice | A journaled intent comes before dispatch. An unknown outcome holds its keys and is never resent; resolution releases the keys and keeps the record. Reconciliation needs exactly one matching ring entry in the same boot | `notice_state` tests (pure transitions) |
+| Unattended test execution | Removed: no scheduled job runs tests; `--job quality` is refused. Gates run only explicitly, in hooks or protected CI | Job CLI refusal test |
+| Installer clobbering units | One lock shared by both installers for the whole transaction, `systemd-analyze verify`, backups, a refusal for unmanaged units, rollback of each timer's enabled and active state when a step raises (not power-loss or SIGKILL atomicity) | Installer tests, cross-installer re-entry test |
 | Timer escalation | User unit with systemd hardening; exposure measured with `systemd-analyze --user security` | Card Q2 |
 
 ## Out of scope and residual risk
