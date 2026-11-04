@@ -1,0 +1,21 @@
+# Gates for local.collective. Owner: collective-claude (Q1). Same command as pre-commit: tools/check.py
+stages: [gates]
+gates:
+  stage: gates
+  image: python:${PY}-slim
+  parallel:
+    matrix:
+      - PY: ["3.12", "3.13", "3.14"]
+  timeout: 15m
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    GIT_DEPTH: "1"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null
+    - python -m pip install ruff==0.17.3 mypy==2.4.1 bandit==1.9.4 coverage==7.17.1
+  script:
+    - python -I tools/check.py --keep-going --receipt gates-receipt.json
+  artifacts:
+    when: always
+    paths: [gates-receipt.json]
+    expire_in: 30 days

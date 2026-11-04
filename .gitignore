@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.coverage
+Collective.vault/.obsidian/workspace*.json
+
+# Runtime artifacts and local development environments never belong in publication.
+.venv/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage.*
+.env
+.env.*
+*.pem
+*.key
+plans/
+scheduler-backups/
+gates-receipt.json
