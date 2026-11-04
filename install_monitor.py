@@ -100,11 +100,12 @@ WantedBy=timers.target
     return {SERVICE: service, TIMER: timer}
 
 
-def command(argv: list[str]) -> None:
-    """Run a fixed scheduler command with bounded output and a timeout."""
+def command(argv: list[str], *, check: bool = True) -> int:
+    """Run a fixed scheduler command with bounded output and a timeout; return its exit status."""
     p = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=100, check=False)  # noqa: S603 - argv-only scheduler operations, no shell
-    if p.returncode:
+    if check and p.returncode:
         raise CollectiveError(f"{argv[0]} failed with exit {p.returncode}; inspect the user service journal")
+    return p.returncode
 
 
 def atomic(path: Path, data: bytes) -> None:
@@ -159,14 +160,18 @@ def unit_originals(destination: Path) -> dict[str, bytes | None]:
     return originals
 
 
-def rollback(destination: Path, originals: dict[str, bytes | None], *, was_enabled: bool) -> list[str]:
-    """Restore files and fresh-install enablement; retain every cleanup error."""
+def rollback(
+    destination: Path, originals: dict[str, bytes | None], *, was_enabled: bool, was_active: bool
+) -> list[str]:
+    """Restore files and the prior timer enablement and activity; retain every cleanup error."""
     errors: list[str] = []
-    if not was_enabled:
+    for wanted, verb in ((was_active, "stop"), (was_enabled, "disable")):
+        if wanted:
+            continue
         try:
-            command(["systemctl", "--user", "disable", "--now", TIMER])
+            command(["systemctl", "--user", verb, TIMER])
         except (OSError, CollectiveError, subprocess.TimeoutExpired) as exc:
-            errors.append(f"disable timer: {exc}")
+            errors.append(f"{verb} timer: {exc}")
     for name, data in originals.items():
         try:
             if data is None:
@@ -198,18 +203,8 @@ def install() -> dict[str, str]:
     for name, content in units().items():
         atomic(staged / name, content.encode())
     command(["systemd-analyze", "--user", "verify", str(staged / SERVICE), str(staged / TIMER)])
+    was_active = command(["systemctl", "--user", "is-active", "--quiet", TIMER], check=False) == 0
     private_dir(Path.home() / ".local/state/collective")
-    try:
-        for name, content in units().items():
-            atomic(destination / name, content.encode())
-        command(["systemctl", "--user", "daemon-reload"])
-        command(["systemctl", "--user", "enable", "--now", TIMER])
-        command(["systemctl", "--user", "start", SERVICE])
-    except (OSError, CollectiveError, subprocess.TimeoutExpired) as exc:
-        errors = rollback(destination, originals, was_enabled=was_enabled)
-        if errors:
-            exc.add_note("Rollback errors: " + "; ".join(errors))
-        raise
     receipt = {
         "timer": TIMER,
         "service": SERVICE,
@@ -220,7 +215,21 @@ def install() -> dict[str, str]:
         "scope": "passive metadata checks and deduplicated human notices; no model turns",
         "undo": f"systemctl --user disable --now {TIMER}; restore backed-up units; systemctl --user daemon-reload",
     }
-    write_private_json(state / "scheduler-install-receipt.json", receipt)
+    receipt_path = state / "scheduler-install-receipt.json"
+    write_private_json(receipt_path, {**receipt, "status": "installing"})
+    try:
+        for name, content in units().items():
+            atomic(destination / name, content.encode())
+        command(["systemctl", "--user", "daemon-reload"])
+        command(["systemctl", "--user", "enable", "--now", TIMER])
+        command(["systemctl", "--user", "start", SERVICE])
+        receipt["status"] = "installed"
+        write_private_json(receipt_path, receipt)
+    except (OSError, CollectiveError, subprocess.TimeoutExpired) as exc:
+        errors = rollback(destination, originals, was_enabled=was_enabled, was_active=was_active)
+        if errors:
+            exc.add_note("Rollback errors: " + "; ".join(errors))
+        raise
     return receipt
 
 

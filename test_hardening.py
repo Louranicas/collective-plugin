@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import importlib.util
 import io
 import json
 import os
@@ -294,7 +295,7 @@ class InstallerTests(unittest.TestCase):
             for name in (installer.SERVICE, installer.TIMER):
                 (unit_dir / name).write_bytes(original)
 
-            def command(argv: Any) -> Any:
+            def command(argv: Any, *, check: bool = True) -> Any:
                 if argv[-2:] == ["start", installer.SERVICE]:
                     raise installer.CollectiveError("fixture activation refused")
 
@@ -327,6 +328,118 @@ class InstallerTests(unittest.TestCase):
                 installer.install()
             self.assertEqual(target.read_text(), "keep")
 
+    def test_unsafe_existing_receipt_is_refused_before_any_unit_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            state = core.private_dir(home / ".local/state/collective-plugin")
+            receipt = state / "scheduler-install-receipt.json"
+            receipt.write_text("{}", encoding="utf-8")
+            receipt.chmod(0o644)
+            with (
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch.object(installer, "command", return_value=0) as commands,
+                self.assertRaises(installer.CollectiveError),
+            ):
+                installer.install()
+            verbs = [call.args[0][2] for call in commands.call_args_list if call.args[0][0] == "systemctl"]
+            self.assertEqual(verbs, ["is-active"])
+            for name in (installer.SERVICE, installer.TIMER):
+                self.assertFalse((home / ".config/systemd/user" / name).exists())
+            self.assertEqual(receipt.read_text(encoding="utf-8"), "{}")
+
+    def test_late_receipt_failure_rolls_back_and_keeps_paused_timer_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            unit_dir = home / ".config/systemd/user"
+            wants = unit_dir / "timers.target.wants"
+            wants.mkdir(parents=True)
+            unit_dir.chmod(0o755)
+            original = b"# Managed by local.collective;\n[Unit]\nDescription=old\n"
+            for name in (installer.SERVICE, installer.TIMER):
+                (unit_dir / name).write_bytes(original)
+            (wants / installer.TIMER).symlink_to(unit_dir / installer.TIMER)
+            calls: list[list[str]] = []
+
+            def command(argv: Any, *, check: bool = True) -> int:
+                calls.append(argv)
+                return 3 if "is-active" in argv else 0
+
+            real_write = installer.write_private_json
+            writes = 0
+
+            def write(path: Any, value: Any) -> None:
+                nonlocal writes
+                writes += 1
+                if writes == 2:
+                    raise OSError("fixture receipt persistence refused")
+                real_write(path, value)
+
+            with (
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch.object(installer, "command", side_effect=command),
+                mock.patch.object(installer, "write_private_json", side_effect=write),
+                self.assertRaisesRegex(OSError, "fixture receipt persistence refused"),
+            ):
+                installer.install()
+            for name in (installer.SERVICE, installer.TIMER):
+                self.assertEqual((unit_dir / name).read_bytes(), original)
+            after = calls[calls.index(["systemctl", "--user", "start", installer.SERVICE]) + 1 :]
+            self.assertIn(["systemctl", "--user", "stop", installer.TIMER], after)
+            self.assertNotIn("disable", [argv[2] for argv in after])
+
+    def test_rollback_restores_fresh_install_to_disabled_and_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp)
+            (destination / installer.TIMER).write_text("staged", encoding="utf-8")
+            with mock.patch.object(installer, "command", return_value=0) as commands:
+                errors = installer.rollback(destination, {installer.TIMER: None}, was_enabled=False, was_active=False)
+            self.assertEqual(errors, [])
+            self.assertFalse((destination / installer.TIMER).exists())
+            self.assertEqual(
+                [call.args[0][2] for call in commands.call_args_list], ["stop", "disable", "daemon-reload"]
+            )
+            with mock.patch.object(installer, "command", return_value=0) as commands:
+                installer.rollback(destination, {}, was_enabled=True, was_active=True)
+            self.assertEqual([call.args[0][2] for call in commands.call_args_list], ["daemon-reload"])
+
+
+class CoverageGateTests(unittest.TestCase):
+    def test_module_below_floor_fails_even_when_aggregate_passes(self) -> None:
+        spec = importlib.util.spec_from_file_location("collective_gates", Path(__file__).parent / "tools/check.py")
+        assert spec is not None
+        assert spec.loader is not None
+        gates = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {spec.name: gates}):
+            spec.loader.exec_module(gates)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text(
+                '[tool.coverage.run]\nbranch = true\nsource = ["big", "small"]\n'
+                "[tool.coverage.report]\nfail_under = 90\n",
+                encoding="utf-8",
+            )
+            body = "".join(f"    v{n} = {n}\n" for n in range(80))
+            (root / "big.py").write_text(f"def f():\n{body}    return v0\n", encoding="utf-8")
+            (root / "small.py").write_text(
+                "def g(x):\n    if x:\n        return 1\n    a = 2\n    b = 3\n    return a + b\n",
+                encoding="utf-8",
+            )
+            (root / "driver.py").write_text("import big, small\nbig.f()\nsmall.g(True)\n", encoding="utf-8")
+            env = {"COVERAGE_FILE": str(root / ".coverage")}
+            coverage = [sys.executable, "-m", "coverage"]
+            with (
+                mock.patch.object(gates, "ROOT", root),
+                mock.patch.object(gates, "SOURCES", ("big.py", "small.py")),
+                mock.patch.object(gates, "tool", return_value=coverage),
+            ):
+                self.assertEqual(gates.run([*coverage, "run", "driver.py"], env)[0], 0)
+                self.assertEqual(gates.run([*coverage, "report"], env)[0], 0)
+                gate = gates.Gate("coverage")
+                gates.g_coverage(gate, env)
+        self.assertFalse(gate.ok)
+        self.assertTrue(any(line.startswith("big.py: meets") for line in gate.detail))
+        self.assertTrue(any(line.startswith("small.py: BELOW") for line in gate.detail))
+
 
 class HeartbeatTests(unittest.TestCase):
     def test_command_errors_are_unknown_not_success(self) -> None:
@@ -358,9 +471,35 @@ class HeartbeatTests(unittest.TestCase):
             path.write_text("bad-json", encoding="utf-8")
             self.assertEqual(heartbeat.load("memory.json", {"fallback": True}), {"fallback": True})
 
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_hanging_tools_are_bounded_by_the_sweep_deadline(self) -> None:
+        service = installer.units()[installer.SERVICE]
+        settings = dict(line.split("=", 1) for line in service.splitlines() if "=" in line and line[0].isalpha())
+        self.assertLess(heartbeat.READ_BUDGET_S + heartbeat.NOTICE_S, float(settings["TimeoutStartSec"]) - 15)
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            state = Path(tmp) / "state"
+            script = Path(tmp) / "hanging-tool"
+            script.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n", encoding="utf-8")
+            script.chmod(0o700)
+            stack.enter_context(mock.patch.object(heartbeat, "STATE", state))
+            stack.enter_context(mock.patch.object(heartbeat, "TUIOS", str(script)))
+            stack.enter_context(mock.patch.object(heartbeat, "HERDR_SOCK", str(Path(tmp) / "absent.sock")))
+            stack.enter_context(mock.patch.object(heartbeat, "WATCH_PEERS", ()))
+            stack.enter_context(mock.patch.object(heartbeat, "READ_BUDGET_S", 0.5))
+            stack.enter_context(mock.patch.object(heartbeat, "NOTICE_S", 0.5))
+            stack.enter_context(mock.patch.object(sys, "argv", ["heartbeat.py", "--full"]))
+            started = time.monotonic()
+            self.assertEqual(heartbeat.main(), 0)
+            elapsed = time.monotonic() - started
+            self.assertEqual(heartbeat.SWEEP.end, float("inf"))
+            board: dict[str, Any] = heartbeat.load("heartbeat.json", {})
+            memory: dict[str, Any] = heartbeat.load("memory.json", {})
+        self.assertLess(elapsed, 3)
+        self.assertTrue(any("could not read tuios" in a for a in board["alerts"]))
+        self.assertTrue(any("native herdr socket" in a for a in board["alerts"]))
+        self.assertIsNone(board["herdr"])
+        self.assertEqual(memory["notice_rc"], 99)
+        self.assertEqual(memory["notice_failures"], 1)
+        self.assertEqual(memory["sent"], {})
 
     def test_watched_peer_list_strips_whitespace_and_empty_entries(self) -> None:
         env = {**os.environ, "COLLECTIVE_WATCH_PEERS": " fixture-a, fixture-b ,, "}
@@ -422,7 +561,7 @@ class AdversarialBoundaries(unittest.TestCase):
             home = Path(tmp)
             seen = []
 
-            def command(argv: Any) -> Any:
+            def command(argv: Any, *, check: bool = True) -> Any:
                 seen.append(argv)
                 if argv[-2:] == ["start", installer.SERVICE]:
                     raise installer.CollectiveError("original activation failure")
@@ -501,11 +640,13 @@ class HeartbeatLifecycle(unittest.TestCase):
         )
         self.stack.enter_context(mock.patch.object(heartbeat, "activity", return_value=(True, ["fixture-active"])))
         self.send = mock.Mock(return_value=(0, ""))
+        self.ring: dict[str, Any] = {"boot_id": "fixture-boot", "evicted": 0}
+        self.ring_rc = 0
 
-        def transport(argv: Any) -> Any:
+        def transport(argv: Any, *args: Any, **kwargs: Any) -> Any:
             if "send-agent-message" in argv:
                 return self.send(argv)
-            return 0, json.dumps({"boot_id": "fixture-boot", "evicted": 0})
+            return self.ring_rc, json.dumps(self.ring)
 
         self.stack.enter_context(mock.patch.object(heartbeat, "run", side_effect=transport))
 
@@ -639,6 +780,68 @@ class HeartbeatLifecycle(unittest.TestCase):
         with self.assertRaises(ValueError):
             heartbeat.main()
         self.agents.assert_not_called()
+
+    def test_notice_induced_ring_eviction_does_not_feed_itself(self) -> None:
+        self.ring["evicted"] = 100
+
+        def evicting_send(argv: Any) -> Any:
+            self.ring["evicted"] += 1
+            return 0, ""
+
+        self.send.side_effect = evicting_send
+        for _ in range(3):
+            self.assertEqual(heartbeat.main(), 0)
+            self.clock.return_value += 120
+        self.assertEqual(self.send.call_count, 1)
+        self.assertIn("history incomplete", self.send.call_args.args[0][-1])
+        board: dict[str, Any] = heartbeat.load("heartbeat.json", {})
+        self.assertEqual(board["ring"], {"boot": "fixture-boot", "evicted": 101})
+        self.clock.return_value += heartbeat.OBSOLETE_S
+        self.ring["evicted"] += 1
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 2)
+
+    def test_unchanged_active_condition_is_not_resent_after_retention_window(self) -> None:
+        self.agents.return_value = [{"window_id": "pane", "unread": 1, "harness_id": "fixture"}]
+        self.assertEqual(heartbeat.main(), 0)
+        self.clock.return_value += heartbeat.STALE_MAIL_S + 1
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 1)
+        self.clock.return_value += 172801
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 1)
+        memory: dict[str, Any] = heartbeat.load("memory.json", {})
+        self.assertIn("mail:pane", memory["sent"])
+
+    def test_verified_daemon_restart_resets_mail_ages_and_acknowledgements(self) -> None:
+        self.agents.return_value = [{"window_id": "pane", "unread": 1, "needs_you": True, "harness_id": "fixture"}]
+        self.native.return_value = [{"pane": "native", "agent": "fixture", "status": "blocked"}]
+        self.assertEqual(heartbeat.main(), 0)
+        self.clock.return_value += heartbeat.STALE_MAIL_S + 1
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 1)
+        self.ring_rc = 99
+        self.clock.return_value += 120
+        self.assertEqual(heartbeat.main(), 0)
+        memory: dict[str, Any] = heartbeat.load("memory.json", {})
+        self.assertEqual(memory["unread_since"], {"pane": 10000})
+        self.assertIn("mail:pane", memory["sent"])
+        self.ring_rc = 0
+        self.ring["boot_id"] = "fixture-boot-2"
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 1)
+        memory = heartbeat.load("memory.json", {})
+        restart = self.clock.return_value
+        self.assertEqual(memory["unread_since"], {"pane": restart})
+        self.assertEqual(memory["needs_since"], {"pane": restart, "hblocked:native": 10000})
+        self.assertNotIn("mail:pane", memory["sent"])
+        self.assertIn("needs:hblocked:native", memory["sent"])
+        self.clock.return_value += heartbeat.STALE_MAIL_S + 1
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 2)
+        body = self.send.call_args.args[0][-1]
+        self.assertIn("unread", body)
+        self.assertNotIn("herdr fixture native", body)
 
     def test_untrusted_memory_schema_is_refused_before_effect(self) -> None:
         values: list[Any] = [
@@ -892,7 +1095,7 @@ class SchedulerRecoveryPaths(unittest.TestCase):
             home = Path(tmp)
             failed = False
 
-            def command(argv: Any) -> Any:
+            def command(argv: Any, *, check: bool = True) -> Any:
                 nonlocal failed
                 if argv[-2:] == ["start", installer.SERVICE]:
                     failed = True

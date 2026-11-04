@@ -29,6 +29,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TypedDict, cast
 
@@ -41,6 +42,14 @@ STATE = Path(os.environ.get("XDG_STATE_HOME", str(Path("~/.local/state").expandu
 STALE_MAIL_S = 30 * 60
 NEEDS_YOU_S = 15 * 60
 RELAY_REPEAT_S = 24 * 3600
+# Reminder and obsolete keys (relay day, ring-loss boot, peer transitions) are forgotten after this.
+OBSOLETE_S = 2 * RELAY_REPEAT_S
+# One sweep must finish inside the unit's TimeoutStartSec=90: all reads share READ_BUDGET_S, and the
+# human notice keeps its own reserved NOTICE_S so a slow read can never starve the durable outcome.
+READ_CALL_S = 20.0
+READ_BUDGET_S = 45.0
+NATIVE_CALL_S = 10.0
+NOTICE_S = 20.0
 RELAY_UNITS = ("ssh-independent-relay-machine-tunnel.service", "ssh-independent-relay-machine-connector.service")
 WATCH_PEERS = tuple(p.strip() for p in os.environ.get("COLLECTIVE_WATCH_PEERS", "").split(",") if p.strip())
 SESSION = os.environ.get("COLLECTIVE_SESSION", "session-0")  # pinned; never sent --from a pane
@@ -58,15 +67,32 @@ ACTIVE_STAGES = {"doing", "verify", "review", "plan"}
 HERDR_SOCK = os.environ.get("HERDR_NATIVE_SOCKET", str(Path("~/.config/herdr/herdr.sock").expanduser()))
 
 
+@dataclass
+class ReadDeadline:
+    """Monotonic end of the read phase of the current sweep; unbounded outside a sweep."""
+
+    end: float = math.inf
+
+    def remaining(self, limit: float) -> float:
+        """Return the per-call budget clamped to what is left of the sweep's reads."""
+        return min(limit, self.end - time.monotonic())
+
+
+SWEEP = ReadDeadline()
+
+
 def herdr_agents() -> list[dict[str, str | None]] | None:
     """Native herdr roster via its Unix socket: the read-only agent.list method only. None if unavailable."""
     try:
         st = os.lstat(HERDR_SOCK)
         if not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
             return None
+        limit = SWEEP.remaining(NATIVE_CALL_S)
+        if limit <= 0:
+            return None
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            deadline = time.monotonic() + 10
-            s.settimeout(10)
+            deadline = time.monotonic() + limit
+            s.settimeout(limit)
             s.connect(HERDR_SOCK)
             credentials = s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
             require(condition=struct.unpack("3i", credentials)[1] == os.getuid(), message="Herdr peer UID mismatch")
@@ -137,10 +163,13 @@ def require_pipe(pipe: IO[bytes] | None) -> None:
     require(condition=pipe is not None, message="Missing process output pipe")
 
 
-def run(argv: list[str], timeout: float = 20) -> tuple[int, str]:
-    """Read bounded output with one absolute deadline; never invoke a shell."""
+def run(argv: list[str], timeout: float = READ_CALL_S, *, reserved: bool = False) -> tuple[int, str]:
+    """Read bounded output with one absolute deadline inside the sweep budget; never invoke a shell."""
+    limit = timeout if reserved else SWEEP.remaining(timeout)
+    if limit <= 0:
+        return 99, "Heartbeat sweep read deadline exceeded"
     output, errors = bytearray(), bytearray()
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + limit
     try:
         with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:  # noqa: S603 - fixed argv callers, no shell
             try:
@@ -372,8 +401,10 @@ def main() -> int:
         print("heartbeat: another run holds the lock; skipping")
         return 0
     try:
+        SWEEP.end = time.monotonic() + READ_BUDGET_S
         return sweep(dry=dry)
     finally:
+        SWEEP.end = math.inf
         os.close(lock_fd)
 
 
@@ -500,6 +531,10 @@ def sweep(*, dry: bool) -> int:
         return 0
     mem["last_full"] = now
     mem["mode"] = "active" if is_active else "quiet-full"
+    previous_boot = mem["ring_boot"]
+    boot = ring_alert(mem, alerts)
+    if boot is not None and previous_boot and boot != previous_boot:
+        forget_tuios_tracking(mem)
     rows, live = agent_rows(ag, mem, now, alerts)
     ha = herdr_agents()
     live |= native_alerts(ha, mem, now, alerts)
@@ -509,7 +544,6 @@ def sweep(*, dry: bool) -> int:
     relay_alerts(rl, alerts)
     pr = peers()
     peer_alerts(pr, mem, alerts)
-    ring_alert(mem, alerts)
     board: dict[str, object] = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
         "agents": rows,
@@ -524,6 +558,7 @@ def sweep(*, dry: bool) -> int:
             },
             "blocked": [h["pane"] for h in ha if h["status"] == "blocked"],
         },
+        "ring": {"boot": mem["ring_boot"], "evicted": mem["ring_evicted"]},
         "alerts": [t for _, t in alerts],
         "flex": {"mode": mem["mode"], "reasons": reasons, "tick_s": 120, "quiet_full_s": QUIET_FULL_S},
     }
@@ -548,7 +583,11 @@ def notify(new: list[tuple[str, str]], mem: MemoryState, now: float) -> None:
     # Persist intent before sending; a process interruption must also observe backoff.
     mem["notice_failures"] += 1
     save("memory.json", mem)
-    rc, _ = run([TUIOS, "send-agent-message", "-s", SESSION, "-w", "human", "--subject", "collective heartbeat", body])
+    rc, _ = run(
+        [TUIOS, "send-agent-message", "-s", SESSION, "-w", "human", "--subject", "collective heartbeat", body],
+        NOTICE_S,
+        reserved=True,
+    )
     mem["notice_rc"] = rc
     if rc == 0:
         mem["notice_failures"] = 0
@@ -556,32 +595,42 @@ def notify(new: list[tuple[str, str]], mem: MemoryState, now: float) -> None:
             mem["sent"][key] = now
 
 
-def ring_alert(mem: MemoryState, alerts: list[tuple[str, str]]) -> None:
-    """Observe ring loss bound to the daemon boot without changing receipts."""
+def forget_tuios_tracking(mem: MemoryState) -> None:
+    """After a verified tuios daemon restart, drop pre-restart mail/needs ages and their acknowledgements."""
+    mem["unread_since"] = {}
+    mem["needs_since"] = {k: v for k, v in mem["needs_since"].items() if k.startswith("hblocked:")}
+    mem["sent"] = {
+        k: v for k, v in mem["sent"].items() if not k.startswith(("mail:", "needs:")) or k.startswith("needs:hblocked:")
+    }
+
+
+def ring_alert(mem: MemoryState, alerts: list[tuple[str, str]]) -> str | None:
+    """Observe ring loss once per daemon boot; return the verified boot, or None when it is unknown."""
     before_rc, before_text = run([TUIOS, "call", "list-attention", "{}"])
     ring_rc, ring_text = run([TUIOS, "read-agent-messages", "-s", SESSION, "--limit", "1", "--json"])
     after_rc, after_text = run([TUIOS, "call", "list-attention", "{}"])
     if before_rc or ring_rc or after_rc:
-        return
+        return None
     try:
         before, ring, after = (json.loads(text) for text in (before_text, ring_text, after_text))
         if not all(isinstance(row, dict) for row in (before, ring, after)):
-            return
+            return None
         boot = before.get("boot_id")
         if not isinstance(boot, str) or not boot or len(boot) > MAX_BOOT_BYTES or after.get("boot_id") != boot:
-            return
+            return None
         evicted = max(0, int(number(ring.get("evicted"))))
         previous = mem["ring_evicted"] if mem["ring_boot"] == boot else 0
         if evicted > previous:
             alerts.append(
                 (
-                    f"ring-loss:{metadata(boot)}:{evicted}",
+                    f"ring-loss:{metadata(boot)}",
                     f"Tuios ring reports {evicted} evicted messages in this daemon boot; history incomplete",
                 )
             )
         mem["ring_boot"], mem["ring_evicted"] = boot, evicted
     except (ValueError, TypeError):
-        return
+        return None
+    return boot
 
 
 def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, str]], now: float, *, dry: bool) -> int:
@@ -589,15 +638,18 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
     fresh = {k.rsplit(":", 1)[0] for k, _ in alerts if k.startswith(TRANSIENT)}
     alerts = alerts + [(k, t) for k, t in mem["pending"].items() if k.rsplit(":", 1)[0] not in fresh]
     active = {k for k, _ in alerts}
-    # Resolved conditions are forgotten so the same problem recurring later alerts again.
-    # A condition whose age is still tracked (including through a failed read) keeps its key.
-    # Peer keys stay until the opposite transition replaces them; relay keys expire by day.
+    # Resolvable conditions keep their acknowledgement while active or tracked (including through a
+    # failed read) and are forgotten on resolution, so a recurrence alerts again. Reminder and obsolete
+    # keys (relay day, ring-loss boot, peer transitions) expire after OBSOLETE_S.
     tracked = {f"mail:{k}" for k in mem["unread_since"]} | {f"needs:{k}" for k in mem["needs_since"]}
     mem["sent"] = {
         k: v
         for k, v in mem["sent"].items()
-        if (k in active or k in tracked or not k.startswith(RESOLVABLE) or k.startswith("peer:"))
-        and now - v < RELAY_REPEAT_S * 2
+        if (
+            (k in active or k in tracked)
+            if k.startswith(RESOLVABLE) and not k.startswith("peer:")
+            else now - v < OBSOLETE_S
+        )
     }
     for h in WATCH_PEERS:
         if f"peer:{h}:True" in active:
