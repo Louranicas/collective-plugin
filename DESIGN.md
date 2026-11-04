@@ -99,10 +99,10 @@ There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user tim
 | Item | Detail |
 |---|---|
 | Units | `~/.config/systemd/user/collective-heartbeat.timer` and `.service`. The service runs `ExecStart=/usr/bin/python3 -I ~/tuios-setup/collective-plugin/heartbeat.py` with `TimeoutStartSec=90` |
-| Installer | `install_monitor.py` (Codex 3) repoints the same units, with private backups and an install receipt under `~/.local/state/collective-plugin/scheduler-backups/` |
+| Installer | `install_monitor.py` (Codex 3) repoints the same units. Private unit backups go under `~/.local/state/collective-plugin/scheduler-backups/`; the receipt is `~/.local/state/collective-plugin/scheduler-install-receipt.json` (`installing` → `installed`, or `rolled-back` with the original error and `previous` = last accepted install) |
 | Cadence (FLEX, Luke 2026-11-04) | 2-min tick. A full sweep every tick while the collective is **active**: `needs_you`, mail sent in the last 15 min, or an unblocked card in plan/doing/verify/review. Otherwise a full sweep at most every 15 min |
 | Sweep | tuios roster (unread age, `needs_you`, `draft_held`); native herdr `agent.list` (`blocked` for more than 15 min); relay units; Tailscale peers. Writes a private board, `~/.local/state/collective/heartbeat.json`. The existing dedup state was retained |
-| Alerts | Change-only messages to Luke's tuios `human` inbox. A resolved alert re-arms. The relay alert is sent at most once a day |
+| Alerts | Change-only messages to Luke's tuios `human` inbox. A resolved alert re-arms. The relay alert is sent at most once a day; `ring-loss:<boot>` reminds at most once per 48 h. A verified daemon restart resets tuios mail/needs ages and acknowledgements. One-shot alerts persist as pending until delivered. Reads share a 45 s budget and the notice keeps a reserved 20 s, inside `TimeoutStartSec=90` |
 | Off switch | `systemctl --user disable --now collective-heartbeat.timer` |
 
 A sweep is passive: it sends no replies, marks nothing read and starts no model turns. Each agent keeps its own session check where its harness allows one. Claude checks about every 7 minutes, session-only, expiring after 7 days. Codex sessions have no in-session scheduler and rely on tuios mail-wake plus this timer. `collective.py monitor` is the plugin's own one-shot sweep, for manual or future use; no timer runs it.

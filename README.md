@@ -3,7 +3,7 @@
 One passive view of how the agents on this desktop communicate (tuios, native herdr, MemPalace, atuin and local SSH state), plus one reviewed write lane: local tuios mail.
 
 - Python standard library only.
-- **Prototype, enabled locally** in tuios and native herdr (read-only actions verified). The repos are public, with CI-required branch protection. Check `tuios plugins info local.collective` for live state. Tests: `test_collective.py`, **36/36** on the frozen source. See [DESIGN.md §8](DESIGN.md#8-verification-receipt-claude-independent-verifier-2026-11-04).
+- **Prototype, enabled locally** in tuios and native herdr (read-only actions verified). The repos are public, with CI-required branch protection. Check `tuios plugins info local.collective` for live state. Current proof: one canonical gate, `python3 -I tools/check.py` (selftest, hygiene, fitness, format, lint, strict types, security, 98 tests in `test_collective.py` and `test_hardening.py` under branch coverage, and a ≥ 90% coverage floor in aggregate and per production module); measured results are in [Collective.vault/Evidence/Verification.md](Collective.vault/Evidence/Verification.md). The 36/36 run in [DESIGN.md §8](DESIGN.md#8-verification-receipt-claude-independent-verifier-2026-11-04) is a dated historical receipt.
 - Design and safety model: [DESIGN.md](DESIGN.md).
 - Reference vault (architecture, workflow, operations, evidence): [Collective.vault/Home.md](Collective.vault/Home.md).
 

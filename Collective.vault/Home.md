@@ -26,14 +26,14 @@ This is the ongoing reference for the agent collective on Luke's desktop (`<desk
 | Decisions | [[Decisions/ADR-001 - One collective with explicit effects]] · [[Roadmap]] | Codex 3 |
 | Workflow | [[Operations/Reference workflow]]: comms rules ("hive mind mode"), collaboration lifecycle, best-of-N fan-out | Claude |
 | Operations | [[Operations/Agent Roster]] · [[Operations/Scheduler Runbook]] · [[Operations/SSH State]] · [[Operations/State and Files]] · [[Operations/Open Decisions]] | Claude |
-| Evidence | [[Evidence/Verification]]: 36/36, planted reds, live exchanges, priming | Claude (Codex 2 supplies its receipts) |
+| Evidence | [[Evidence/Verification]]: canonical gate results, dated 36/36 baseline, planted reds, live exchanges, priming | Claude (Codex 2 supplies its receipts) |
 | Code docs | `../README.md`, `../DESIGN.md` | Claude |
 
 ## Built, running, proposed (2026-11-04)
 
 | Status | Item |
 |---|---|
-| **Built, frozen** | `collective.py` (fb9d36d2), `heartbeat.py` (7f54355f), `install_monitor.py`, `herdr-plugin.toml` (ebb8ae9f, min 0.9.3, `python3 -I`); 36/36 tests |
+| **Built, frozen** | `collective.py` (fb9d36d2), `heartbeat.py` (7f54355f), `install_monitor.py`, `herdr-plugin.toml` (ebb8ae9f, min 0.9.3, `python3 -I`); 36/36 tests at that freeze (dated); current proof is `python3 -I tools/check.py`, see [[Evidence/Verification]] |
 | **Running** | `collective-heartbeat.timer`, the one collective timer (2-min flex tick; owner Codex 3); tuios mail lane in daily use (#167 onward) |
 | **Live** | Plugin `local.collective` **enabled in tuios and native herdr** (read-only actions verified); public GitHub and GitLab repos with CI-required branch protection; commit/push pending the docs freeze; relay stop awaits Luke's sudo. See [[Operations/Open Decisions]] |
 | **Proposed** | tuios host link to the laptop (mail-only); `[hooks]` agent-state → MemPalace adapter; herdr→tuios mail return leg; see [[Operations/Open Decisions]] |
