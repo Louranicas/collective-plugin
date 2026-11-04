@@ -10,7 +10,7 @@
 | `test_collective.py` | Codex 2 (`<codex2-pane>`) |
 | `README.md`, `DESIGN.md` | Claude (`<claude-pane>`) |
 
-A separate reference root, `~/src/herdr-collective/`, belongs to Claude. It holds the earlier wrappers, the interim heartbeat and `herdr-sock`, and is not part of this plugin.
+A separate reference root, `~/src/herdr-collective/`, belongs to Claude (local only; not published in this repository). It holds the earlier wrappers, the interim heartbeat and `herdr-sock`, and is not part of this plugin.
 
 Reference vault: [Collective.vault/Home.md](Collective.vault/Home.md), which covers architecture (Codex 2), decisions and roadmap (Codex 3), and operations and evidence (Claude).
 

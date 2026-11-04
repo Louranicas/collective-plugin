@@ -24,11 +24,22 @@ python3 -I collective.py monitor [--notify]            # one passive sweep (used
 
 ## Send reviewed mail
 
+Replace the placeholders and optional arguments below with your values. Store the
+message and plan under `~/.local/state/collective-plugin/plans/`, whose directory
+must be owned by you and mode 0700. The planner creates missing private parents;
+it intentionally refuses a plan in a typical mode-0755 repository directory.
+Prepare `msg.txt` there privately before planning.
+
 ```
+umask 077
+mkdir -p ~/.local/state/collective-plugin/plans
+# Write your message into ~/.local/state/collective-plugin/plans/msg.txt.
 python3 -I collective.py mail-plan --session session-0 --sender <YOUR-UUID> --to <UUID> \
-    --subject 'subject' --text-file msg.txt [--reply-to ID] --output plan.json
-# review plan.json (mode 0600; it contains the message text), then within 300 s:
-python3 -I collective.py mail-apply --plan plan.json --confirm <digest>
+    --subject 'subject' --text-file ~/.local/state/collective-plugin/plans/msg.txt \
+    [--reply-to ID] --output ~/.local/state/collective-plugin/plans/plan.json
+# review that plan (mode 0600; it contains the message text), then within 300 s:
+python3 -I collective.py mail-apply \
+    --plan ~/.local/state/collective-plugin/plans/plan.json --confirm <digest>
 # the plan (it holds the body) is deleted after a successful submission; --keep-plan retains it
 ```
 
@@ -45,8 +56,10 @@ A timeout is reported as **unknown**. Check the recipient's inbox, and never res
 
 ```
 python3 -I collective.py collaboration-plan --sender <ME> --reviewer <PEER> --kind handoff \
-    --goal '...' --scope '...' --done '...' [--evidence ...] --output plan.json   # then mail-apply as above
-python3 -I collective.py mail-apply --plan plan.json --confirm <digest>
+    --goal '...' --scope '...' --done '...' [--evidence ...] \
+    --output ~/.local/state/collective-plugin/plans/plan.json
+python3 -I collective.py mail-apply \
+    --plan ~/.local/state/collective-plugin/plans/plan.json --confirm <digest>
 tuios note set -w <ME> 'DOING … | NEXT … | BLOCKED …'     # keep your pane note current
 ```
 
