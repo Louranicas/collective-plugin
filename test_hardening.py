@@ -1029,13 +1029,31 @@ class AdversarialBoundaries(unittest.TestCase):
             self.assertLessEqual(len(body.encode()), 8192)
             self.assertNotIn(chr(0x202E), body)
 
-    def test_nonfinite_numeric_metadata_cannot_break_observation(self) -> None:
+    def test_nonfinite_unread_metadata_preserves_unknown_observation(self) -> None:
         for value in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(value=value):
-                rows, _ = heartbeat.agent_rows(
-                    [{"window_id": "pane", "unread": value}], heartbeat.memory_state({}), 10000, []
+                memory = heartbeat.memory_state({"unread_since": {"pane": 1}, "needs_since": {"pane": 2}})
+                alerts: list[tuple[str, str]] = []
+                rows, live = heartbeat.agent_rows(
+                    [{"window_id": "pane", "unread": value, "needs_you": False}], memory, 10000, alerts
                 )
-                self.assertEqual(rows[0]["unread"], 0)
+                self.assertEqual(rows, [])
+                self.assertEqual(live, {"pane"})
+                self.assertEqual(memory["unread_since"], {"pane": 1})
+                self.assertEqual(memory["needs_since"], {"pane": 2})
+                self.assertEqual([key for key, _ in alerts], ["tuios-read"])
+
+    def test_large_valid_unread_count_remains_observed(self) -> None:
+        unread = 10**400
+        memory = heartbeat.memory_state({"unread_since": {"pane": 1}})
+        alerts: list[tuple[str, str]] = []
+        rows, live = heartbeat.agent_rows(
+            [{"window_id": "pane", "unread": unread, "needs_you": False}], memory, 10000, alerts
+        )
+        self.assertEqual(rows[0]["unread"], unread)
+        self.assertEqual(live, {"pane"})
+        self.assertEqual(memory["unread_since"], {"pane": 1})
+        self.assertEqual([key for key, _ in alerts], ["mail:pane"])
 
     def test_malformed_activity_metadata_is_unknown(self) -> None:
         for payload in ("[]", '{"messages":["bad"]}', '{"messages":{}}'):
@@ -1163,13 +1181,62 @@ class HeartbeatLifecycle(unittest.TestCase):
         memory: dict[str, Any] = heartbeat.load("memory.json", {})
         self.assertEqual(memory["needs_since"], {})
         self.assertEqual(memory["unread_since"], {})
-        self.agents.return_value = [{"window_id": "pane", "unread": 1}]
+        self.agents.return_value = [{"window_id": "pane", "unread": 1, "needs_you": False}]
         self.assertEqual(heartbeat.main(), 0)
         self.clock.return_value += heartbeat.STALE_MAIL_S + 1
         self.assertEqual(heartbeat.main(), 0)
         self.assertEqual(self.send.call_count, 2)
         board: dict[str, Any] = heartbeat.load("heartbeat.json", {})
         self.assertEqual(board["flex"]["mode"], "active")
+
+    def test_invalid_alerting_schema_preserves_ages_bypasses_quiet_and_recovers(self) -> None:
+        valid: dict[str, Any] = {"window_id": "other", "unread": 1, "needs_you": True}
+        invalid = [dict(valid, unread=value) for value in (None, "3", float("nan"), float("inf"), -1, True, 1.5)]
+        invalid += [dict(valid, needs_you=value) for value in (None, "false", 0, 1)]
+        invalid += [dict(valid, window_id=value) for value in (None, "", 3)]
+        invalid += [{key: value for key, value in valid.items() if key != missing} for missing in valid]
+        for malformed in invalid:
+            with (
+                self.subTest(malformed=malformed),
+                tempfile.TemporaryDirectory() as tmp,
+                mock.patch.object(heartbeat, "STATE", Path(tmp)),
+            ):
+                self.clock.return_value = 10000
+                self.send.reset_mock()
+                self.agents.return_value = [{"window_id": "pane", "unread": 1, "needs_you": True}, valid]
+                self.assertEqual(heartbeat.main(), 0)
+                self.send.assert_not_called()
+                # Even a valid clear row cannot clear old ages when another row
+                # makes the observation incompatible. A quiet tick must inspect it.
+                self.agents.return_value = [{"window_id": "pane", "unread": 0, "needs_you": False}, malformed]
+                self.clock.return_value += 120
+                with (
+                    mock.patch.object(heartbeat, "activity", return_value=(False, [])),
+                    mock.patch.object(sys, "argv", ["heartbeat.py"]),
+                ):
+                    self.assertEqual(heartbeat.main(), 0)
+                memory: dict[str, Any] = heartbeat.load("memory.json", {})
+                self.assertEqual(memory["unread_since"], {"pane": 10000, "other": 10000})
+                self.assertEqual(memory["needs_since"], {"pane": 10000, "other": 10000})
+                self.assertNotEqual(memory["mode"], "quiet-skip")
+                board: dict[str, Any] = heartbeat.load("heartbeat.json", {})
+                self.assertEqual(board["agents"], [])
+                self.assertTrue(any("UNKNOWN" in alert for alert in board["alerts"]))
+                self.assertEqual(self.send.call_count, 1)
+                self.clock.return_value += 120
+                self.assertEqual(heartbeat.main(), 0)
+                self.assertEqual(self.send.call_count, 1)
+                self.agents.return_value = [
+                    {"window_id": pane, "unread": 0, "needs_you": False} for pane in ("pane", "other")
+                ]
+                self.assertEqual(heartbeat.main(), 0)
+                memory = heartbeat.load("memory.json", {})
+                self.assertEqual(memory["unread_since"], {})
+                self.assertEqual(memory["needs_since"], {})
+                self.assertNotIn("tuios-read", memory["sent"])
+                self.agents.return_value = [malformed]
+                self.assertEqual(heartbeat.main(), 0)
+                self.assertEqual(self.send.call_count, 2)
 
     def test_peer_transition_and_native_unknown_are_change_only(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
@@ -1264,7 +1331,7 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.assertEqual(self.send.call_count, 1)
 
     def test_failed_reads_keep_ages_and_suppress_repeat_notices(self) -> None:
-        self.agents.return_value = [{"window_id": "pane", "unread": 2, "harness_id": "fixture"}]
+        self.agents.return_value = [{"window_id": "pane", "unread": 2, "needs_you": False, "harness_id": "fixture"}]
         self.native.return_value = [{"pane": "native", "agent": "fixture", "status": "blocked"}]
         self.assertEqual(heartbeat.main(), 0)
         self.clock.return_value += heartbeat.STALE_MAIL_S + 1
@@ -1278,7 +1345,7 @@ class HeartbeatLifecycle(unittest.TestCase):
         memory: dict[str, Any] = heartbeat.load("memory.json", {})
         self.assertEqual(memory["unread_since"], {"pane": 10000})
         self.assertEqual(memory["needs_since"], {"hblocked:native": 10000})
-        self.agents.return_value = [{"window_id": "pane", "unread": 2, "harness_id": "fixture"}]
+        self.agents.return_value = [{"window_id": "pane", "unread": 2, "needs_you": False, "harness_id": "fixture"}]
         self.native.return_value = [{"pane": "native", "agent": "fixture", "status": "blocked"}]
         self.clock.return_value += heartbeat.STALE_MAIL_S + 1
         self.assertEqual(heartbeat.main(), 0)
@@ -1345,7 +1412,7 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.assertEqual(self.send.call_count, 2)
 
     def test_unchanged_active_condition_is_not_resent_after_retention_window(self) -> None:
-        self.agents.return_value = [{"window_id": "pane", "unread": 1, "harness_id": "fixture"}]
+        self.agents.return_value = [{"window_id": "pane", "unread": 1, "needs_you": False, "harness_id": "fixture"}]
         self.assertEqual(heartbeat.main(), 0)
         self.clock.return_value += heartbeat.STALE_MAIL_S + 1
         self.assertEqual(heartbeat.main(), 0)

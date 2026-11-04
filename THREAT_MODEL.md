@@ -32,7 +32,7 @@ Owner: collective-claude (card Q1). Scope: `local.collective` (the collective.py
 | Symlink and permission attacks on state | 0700 directories, 0600 files, `O_NOFOLLOW`, owner, nlink and regular-file checks | Fitness F4; tests |
 | Hidden or deceptive text | Every Unicode control (`Cc`) and format (`Cf`) character, including bidi and zero-width, refused in subjects and bodies (newline and tab allowed in bodies only); output passed through `clean()` | Tests |
 | Flooding | 10 intents per sender per minute (plus tuios's own cap); the heartbeat alerts only on change | Journal tests; heartbeat dedup tests |
-| Malformed herdr replies | Response id, shape and size bounds; failures read as *unknown* | Malformed-shape tests (seen red, then green) |
+| Malformed herdr or tuios replies | Response id, shape and size bounds; failures read as *unknown*. A tuios agent row without a valid `unread`, `needs_you` or `window_id` makes the whole observation unknown, so schema drift cannot read as "0 unread, clear" | Malformed-shape tests (seen red, then green) |
 | Plugin code changing after approval | tuios approval is bound to the **manifest** only, so commits are reviewed and pinned | CONTRIBUTING; branch protection |
 | Infrastructure leakage | Publish-set scan for IPs, keys, tokens and emails | `hygiene` gate |
 | Scheduled jobs doing work or spamming | Jobs are metadata-only and descriptive: no mail, wakes, model turns or retries. Only the heartbeat notifies. Each job has its own lock, timeout and memory bound | `coordination_jobs.py` tests; F2 door `_run` |

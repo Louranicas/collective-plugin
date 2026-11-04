@@ -110,7 +110,7 @@ stateDiagram-v2
 | SSH relay in auto-restart | Once a day | `relay:<date>` |
 | Watched peer online/offline (`COLLECTIVE_WATCH_PEERS`) | On change | `peer:<host>:<bool>` |
 | tuios ring evicted more messages in this daemon boot | On increase; reminder at most once per 48 h (`OBSOLETE_S`) | `ring-loss:<boot>` |
-| tuios or herdr read failed | While failing (reported as UNKNOWN) | `tuios-read`, `herdr-read` |
+| tuios or herdr read failed, or a tuios agent row lacks a valid `unread` (non-negative int, not bool), `needs_you` (bool) or `window_id` | While failing. The **whole** tuios observation is UNKNOWN, never "0 unread, clear", and prior ages are kept | `tuios-read`, `herdr-read` |
 
 - **Acknowledgements.** `mail:`, `needs:` and read-failure keys stay acknowledged while the condition is active or still tracked (including through a failed read) and are forgotten only on resolution. Relay-day, `ring-loss:` and peer-transition keys expire after `OBSOLETE_S` (48 h), so an unchanged ring loss reminds at most once per 48 h with the same boot key; a rising evicted count stays board metadata (`ring.evicted`).
 - **Verified daemon restart.** When the tuios `boot_id` reads identically before and after the ring read and differs from the stored boot, tuios mail and `needs_you` ages and their acknowledgements are reset (herdr `hblocked:` tracking is kept). An unreadable or inconsistent boot preserves the stored state.
