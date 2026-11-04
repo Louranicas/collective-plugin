@@ -136,7 +136,8 @@ def pane_uuid(value: object) -> str:
 def _is_refused_char(c: str, *, multiline: bool) -> bool:
     if multiline and c in "\n\t":
         return False
-    return unicodedata.category(c) in {"Cc", "Cf"}
+    category = unicodedata.category(c)
+    return category in {"Cc", "Cf"} or (not multiline and category in {"Zl", "Zp"})
 
 
 def plain_text(value: object, limit: int, *, multiline: bool = True) -> str:
@@ -560,6 +561,14 @@ def _recv_frame(s: socket.socket, deadline: float) -> bytearray:
 
 def _refusal_code(value: object) -> str | None:
     """Recognize documented request rejections, never generic tool failures."""
+    if isinstance(value, dict):
+        for row in (value, value.get("result")):
+            if isinstance(row, dict) and (
+                row.get("success") is True or (type(row.get("message_id")) is int and row["message_id"] > 0)
+            ):
+                # A refusal contradicting possible submission is UNKNOWN, even
+                # when the process exits nonzero or the error code is familiar.
+                return None
     error = value.get("error") if isinstance(value, dict) else None
     code = error.get("code") if isinstance(error, dict) else None
     return code if isinstance(code, str) and code in REFUSAL_CODES else None
@@ -600,6 +609,8 @@ def _parse_tool_result(
         raise TransportUncertain(msg)
     if isinstance(value, dict) and "success" in value and value["success"] is not True:
         raise TransportUncertain("Tool did not confirm success")
+    if isinstance(value, dict) and "result" in value and "message_id" in value:
+        raise TransportUncertain("Tool returned ambiguous receipt layers")
     return value.get("result", value) if isinstance(value, dict) else value
 
 

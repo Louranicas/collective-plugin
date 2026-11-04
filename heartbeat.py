@@ -826,7 +826,9 @@ def notice_result(rc: int, output: str) -> tuple[str, int | None]:
         value = _private_files.parse_json(output)
     except (ValueError, TypeError):
         return "unknown", None
-    if not isinstance(value, dict):
+    # This lane invokes the direct tuios CLI, whose receipt is not wrapped.
+    # Do not combine a root ID with an unrelated or conflicting result layer.
+    if not isinstance(value, dict) or "result" in value:
         return "unknown", None
     error = value.get("error")
     code = error.get("code") if isinstance(error, dict) else None
@@ -842,7 +844,10 @@ def notice_result(rc: int, output: str) -> tuple[str, int | None]:
         "rate_limited",
         "agents_disabled",
     }
-    if isinstance(code, str) and code in refused:
+    possible_submission = value.get("success") is True or (
+        type(value.get("message_id")) is int and value["message_id"] > 0
+    )
+    if isinstance(code, str) and code in refused and not possible_submission:
         return "refused", None
     if rc or error is not None or ("success" in value and value["success"] is not True):
         return "unknown", None

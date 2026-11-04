@@ -577,10 +577,17 @@ elif verb == 'send-agent-message':
     value = mode['envelope']
 else:
     raise AssertionError(verb)
-print(json.dumps(value))
+if verb == 'send-agent-message' and mode.get('raw_reply') is not None:
+    print(mode['raw_reply'])
+else:
+    print(json.dumps(value))
+if verb == 'send-agent-message':
+    raise SystemExit(mode.get('exit_code', 0))
 """
 
-    def cli_case(self, envelope: Any, accepted: bool) -> None:
+    def cli_case(
+        self, envelope: Any, accepted: bool, *, exit_code: int = 0, refused: bool = False, raw_reply: str | None = None
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             binary = root / "bin"
@@ -598,7 +605,14 @@ print(json.dumps(value))
             c.write_private_json(plan_path, plan, exclusive=True)
             (binary / "mode.json").write_text(
                 json.dumps(
-                    {"agents": state["agents"], "envelope": envelope, "journal": str(journal), "digest": plan["digest"]}
+                    {
+                        "agents": state["agents"],
+                        "envelope": envelope,
+                        "journal": str(journal),
+                        "digest": plan["digest"],
+                        "exit_code": exit_code,
+                        "raw_reply": raw_reply,
+                    }
                 ),
                 encoding="utf-8",
             )
@@ -623,10 +637,13 @@ print(json.dumps(value))
             self.assertEqual(first.returncode, 0 if accepted else 2, first.stdout + first.stderr)
             if accepted:
                 self.assertEqual(json.loads(first.stdout)["outcome"], "submitted")
-            else:
+            elif not refused:
                 self.assertIn("outcome unknown", json.loads(first.stderr)["error"])
+            else:
+                self.assertNotIn("outcome unknown", json.loads(first.stderr)["error"])
             rows = [json.loads(line) for line in journal.read_text().splitlines()]
-            self.assertEqual([row["outcome"] for row in rows], ["intent", "submitted" if accepted else "unknown"])
+            expected = "submitted" if accepted else "refused" if refused else "unknown"
+            self.assertEqual([row["outcome"] for row in rows], ["intent", expected])
             before = journal.read_bytes()
             replay = subprocess.run(  # noqa: S603 - exact consumed plan; fake dispatch marker proves no resend
                 argv, env=env, capture_output=True, text=True, timeout=10, check=False
@@ -653,6 +670,50 @@ print(json.dumps(value))
         for envelope, accepted in cases:
             with self.subTest(envelope=envelope):
                 self.cli_case(envelope, accepted)
+
+    def test_contradictory_refusals_are_unknown_at_zero_and_nonzero_exit(self) -> None:
+        error = {"code": "forbidden"}
+        contradictions = [
+            {"error": error, "success": True},
+            {"error": error, "message_id": 42},
+            {"error": error, "result": {"success": True, "message_id": 42}},
+            {"error": error, "success": False, "result": {"message_id": 42}},
+        ]
+        for exit_code in (0, 1):
+            for envelope in contradictions:
+                with self.subTest(exit_code=exit_code, envelope=envelope):
+                    self.cli_case(envelope, False, exit_code=exit_code)
+            with self.subTest(exit_code=exit_code, control="clean refusal"):
+                self.cli_case({"success": False, "error": error}, False, exit_code=exit_code, refused=True)
+            with self.subTest(exit_code=exit_code, control="clean submission"):
+                self.cli_case({"success": True, "message_id": 42}, exit_code == 0, exit_code=exit_code)
+
+    def test_raw_duplicate_keys_never_confirm_submission_or_refusal(self) -> None:
+        replies = [
+            '{"success":false,"success":true,"message_id":42}',
+            '{"success":false,"\\u0073uccess":true,"result":{"message_id":42}}',
+            '{"message_id":0,"message_id":42}',
+            '{"error":{"code":"forbidden"},"error":null,"message_id":42}',
+            '{"result":{"message_id":0,"\\u006dessage_id":42}}',
+            '{"error":{"code":"rate_limited","code":"forbidden"}}',
+        ]
+        for raw in replies:
+            with self.subTest(raw=raw):
+                self.cli_case(None, False, raw_reply=raw)
+        self.cli_case(None, True, raw_reply='{"\\u006dessage_id":42}')
+
+    def test_mixed_delivery_layers_are_unknown_at_both_exit_codes(self) -> None:
+        values = [
+            {"message_id": 42, "result": {"success": False, "error": {"code": "forbidden"}}},
+            {"message_id": 42, "result": {"message_id": 43}},
+            {"message_id": 42, "result": {"message_id": 42}},
+            {"message_id": 42, "result": {}},
+            {"message_id": 42, "result": None},
+        ]
+        for exit_code in (0, 1):
+            for value in values:
+                with self.subTest(exit_code=exit_code, value=value):
+                    self.cli_case(value, False, exit_code=exit_code)
 
     def test_direct_receipt_rejects_non_boolean_success_and_malformed_error(self) -> None:
         success_values: list[Any] = [0, "false", None, [], {}]
@@ -759,6 +820,13 @@ class MailTextContracts(unittest.TestCase):
 
     def test_public_planner_preserves_visible_unicode_combining_marks_and_body_whitespace(self) -> None:
         self.plan_case("Café e\u0301 — 中文", "Line one\n\tCafé e\u0301 — 中文 🦉\n", True)
+
+    def test_line_and_paragraph_separators_are_refused_only_in_singleline_subject(self) -> None:
+        for separator in ("\u2028", "\u2029"):
+            with self.subTest(codepoint=hex(ord(separator)), field="subject"):
+                self.plan_case("before" + separator + "after", "readable body", False)
+            with self.subTest(codepoint=hex(ord(separator)), field="body"):
+                self.plan_case("readable subject", "before" + separator + "after", True)
 
 
 class DashboardWatchOutput(unittest.TestCase):

@@ -1135,6 +1135,37 @@ class HeartbeatLifecycle(unittest.TestCase):
                     for reader in (self.agents, self.native, self.relay, self.peers):
                         reader.assert_not_called()
 
+    def test_duplicate_notice_memory_refuses_before_reads_send_or_overwrite(self) -> None:
+        self.agents.return_value = None
+        self.send.return_value = (124, "")
+        self.assertEqual(heartbeat.main(), 0)
+        memory: dict[str, Any] = heartbeat.load("memory.json", {})
+        self.assertEqual(memory["notices"][0]["status"], "unknown")
+        encoded = json.dumps(memory, separators=(",", ":")).encode()
+        held = b'"held_keys":' + json.dumps(memory["notices"][0]["held_keys"], separators=(",", ":")).encode()
+        malformed = (
+            encoded[:-1] + b',"notices":[]}',
+            encoded.replace(held, held + b',"held_keys":[]', 1),
+        )
+        path = self.state / "memory.json"
+        for data in malformed:
+            self.assertNotEqual(data, encoded)
+            for options in ([], ["--dry-run"], ["--release-legacy-notice-hold"]):
+                with self.subTest(data=data, options=options):
+                    path.write_bytes(data)
+                    self.send.reset_mock()
+                    for reader in (self.agents, self.native, self.relay, self.peers):
+                        reader.reset_mock()
+                    with (
+                        mock.patch.object(sys, "argv", ["heartbeat.py", "--full", *options]),
+                        self.assertRaisesRegex(ValueError, "Duplicate JSON object key"),
+                    ):
+                        heartbeat.main()
+                    self.assertEqual(path.read_bytes(), data)
+                    self.send.assert_not_called()
+                    for reader in (self.agents, self.native, self.relay, self.peers):
+                        reader.assert_not_called()
+
     def test_notice_receipt_envelope_requires_literal_success_and_no_error(self) -> None:
         success_values: list[Any] = [False, None, 0, 1, "true", [], {}]
         error_values: list[Any] = [{}, [], False, "", 0]
@@ -2086,6 +2117,94 @@ class HeartbeatNoticeOutcomeRegressions(unittest.TestCase):
 
     def reload(self) -> heartbeat.MemoryState:
         return heartbeat.memory_state(heartbeat.load("memory.json", {}))
+
+    def test_contradictory_documented_refusal_is_unknown_at_both_exit_codes(self) -> None:
+        contradictions: list[dict[str, Any]] = [
+            {"success": True},
+            {"message_id": 42},
+            {"success": False, "message_id": 42},
+            {"success": True, "message_id": 42},
+            {"result": {"success": True}},
+            {"result": {"message_id": 42}},
+        ]
+        for rc in (0, 1):
+            for evidence in contradictions:
+                receipt = {"error": {"code": "forbidden"}, **evidence}
+                with self.subTest(rc=rc, receipt=receipt):
+                    self.assertEqual(heartbeat.notice_result(rc, json.dumps(receipt)), ("unknown", None))
+            with self.subTest(rc=rc, control="clean refusal"):
+                self.assertEqual(
+                    heartbeat.notice_result(rc, '{"success":false,"error":{"code":"forbidden"}}'),
+                    ("refused", None),
+                )
+        self.assertEqual(heartbeat.notice_result(0, '{"success":true,"message_id":42}'), ("submitted", 42))
+        self.assertEqual(heartbeat.notice_result(1, '{"success":true,"message_id":42}'), ("unknown", None))
+
+    def test_contradictory_refusal_does_not_repeat_effect_after_reload_and_backoff(self) -> None:
+        alert = [("tuios-read", "Same unresolved fixture read failure")]
+        results: list[Any] = [
+            {"success": False},
+            {"error": {"code": "forbidden"}},
+            {"success": False, "error": {"code": "forbidden"}},
+            {"message_id": 43},
+            {},
+            None,
+        ]
+        receipts = [{"success": True, "error": {"code": "forbidden"}, "message_id": 42}] + [
+            {"message_id": 42, "result": result} for result in results
+        ]
+        for rc in (0, 1):
+            for receipt in receipts:
+                with (
+                    self.subTest(rc=rc, receipt=receipt),
+                    tempfile.TemporaryDirectory() as tmp,
+                    mock.patch.object(heartbeat, "STATE", Path(tmp)),
+                ):
+                    self.response = (rc, json.dumps(receipt))
+                    self.sent_calls = []
+                    memory = self.memory()
+                    heartbeat.finish({}, memory, alert, 10000, dry=False)
+                    first = self.reload()["notices"][0]
+                    body = self.sent_calls[0][-1]
+                    self.assertIn(first["request_id"], body)
+                    self.assertEqual(first["digest"], hashlib.sha256(body.encode()).hexdigest())
+                    for now in (10599, 10600, 20000):
+                        memory = self.reload()
+                        heartbeat.finish({}, memory, alert, now, dry=False)
+                    recovered = self.reload()
+                    # Every send callback represents a fake committed effect. A known
+                    # refusal would back off then send again; ambiguity must hold.
+                    self.assertEqual(len(self.sent_calls), 1)
+                    self.assertEqual(len(recovered["notices"]), 1)
+                    self.assertEqual(recovered["notices"][0]["request_id"], first["request_id"])
+                    self.assertEqual(recovered["notices"][0]["status"], "unknown")
+                    self.assertEqual(recovered["notices"][0]["held_keys"], [alert[0][0]])
+                    self.assertNotIn(alert[0][0], recovered["sent"])
+
+    def test_clean_refusal_retries_after_backoff_then_submission_deduplicates(self) -> None:
+        alert = [("tuios-read", "Same unresolved fixture read failure")]
+        for rc in (0, 1):
+            with (
+                self.subTest(rc=rc),
+                tempfile.TemporaryDirectory() as tmp,
+                mock.patch.object(heartbeat, "STATE", Path(tmp)),
+            ):
+                self.sent_calls = []
+                self.response = (rc, '{"success":false,"error":{"code":"forbidden"}}')
+                heartbeat.finish({}, self.memory(), alert, 10000, dry=False)
+                first = self.reload()["notices"][0]
+                self.assertEqual(first["status"], "refused")
+                heartbeat.finish({}, self.reload(), alert, 10599, dry=False)
+                self.assertEqual(len(self.sent_calls), 1)
+                self.response = (0, '{"success":true,"message_id":43}')
+                heartbeat.finish({}, self.reload(), alert, 10600, dry=False)
+                recovered = self.reload()
+                self.assertEqual(len(self.sent_calls), 2)
+                self.assertEqual(recovered["notices"][-1]["status"], "submitted")
+                self.assertEqual(recovered["notices"][-1]["message_id"], 43)
+                self.assertNotEqual(first["request_id"], recovered["notices"][-1]["request_id"])
+                heartbeat.finish({}, self.reload(), alert, 20000, dry=False)
+                self.assertEqual(len(self.sent_calls), 2)
 
     def test_unknown_send_results_hold_after_reload_and_backoff(self):
         responses = [
