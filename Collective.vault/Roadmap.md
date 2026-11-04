@@ -14,7 +14,7 @@ Return to [[Home]] · [[Decisions/ADR-001 - One collective with explicit effects
 - Native Herdr's explicit Unix socket read adapter; no confusion between UUID pane addresses and native `wN:pN` addresses.
 - Local tuios mail plans with exact payload binding, expiry, live-peer preflight, a private intent journal, concurrent replay refusal and unknown-outcome handling.
 - Structured collaboration plans for intent, milestones, blockers, handoffs and review.
-- One systemd user timer, installed and enabled, but paused by root (stopped) during the hardening pipeline; it resumes only after an accepted deployment. Check with `systemctl --user is-active collective-heartbeat.timer`. When running it ticks every two minutes, does full checks during active collaboration, and reduces full checks to fifteen-minute intervals when quiet.
+- One systemd user timer, installed and enabled. It was paused by root during the hardening pipeline and observed active again after host acceptance on 2026-11-05 ([[Evidence/Verification]]). Check with `systemctl --user is-active collective-heartbeat.timer`. When running it ticks every two minutes, does full checks during active collaboration, and reduces full checks to fifteen-minute intervals when quiet.
 - Independent tests, planted negative controls, live tuios mail/reply evidence and labelled Herdr-agent response evidence.
 
 ## Operator choices and unavailable routes
@@ -23,7 +23,7 @@ Return to [[Home]] · [[Decisions/ADR-001 - One collective with explicit effects
 |---|---|---|
 | Plugin registration (D2) | Enabled in tuios and native herdr; read-only capabilities and dashboard actions passed in both (`proof/plugin-activation.json`) | Re-register after any manifest change; check with `tuios plugins info local.collective` and `herdr plugin list` |
 | Local baseline commit (D1) | Created; the review-pipeline fix commits follow it | Current proof: the current acceptance receipt in [[Evidence/Verification]] |
-| Push or publication (D1) | Authorised. Public GitHub and GitLab repos exist with merge checks configured; only an empty bootstrap is pushed, the source is not | The source candidate passes the outer test, document, lint, push, PR and CI steps; no remote CI result is claimed here |
+| Push or publication (D1) | Authorised. Public GitHub and GitLab repos exist with merge checks configured; at the 2026-11-05 snapshot the source was on GitHub `feat/collective-comms` (PR #1, draft) and GitLab held only the bootstrap; see [[Operations/Open Decisions]] and the live checks below | The source candidate passes the outer test, document, lint, push, PR and CI steps; no remote CI result is claimed here |
 | Unqualified relay stop (D3) | Authorised; blocked on the owner's `sudo` password, which agents do not bypass | Luke runs the exact command |
 | Shared `kinoite-codex` name (D4) | Done in coordination metadata only | Aliases do not fix shared-name watcher suppression; address agents by pane |
 | Native desktop/laptop tuios link | No configured tuios host | Peer online, endpoint verification, owner-approved per-side policies, traffic and refusal tests |

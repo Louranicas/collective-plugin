@@ -94,7 +94,7 @@ Stated limits, from `capabilities`:
 
 ## 4. Ongoing comms: the scheduler
 
-There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one scheduler**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK; historical). It is currently paused by root during hardening and resumes only after an accepted deployment. There is no second timer.
+There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one scheduler**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK; historical). It was paused by root during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in `Collective.vault/Evidence/Verification.md`); query current state with `systemctl --user is-active collective-heartbeat.timer`. There is no second timer.
 
 | Item | Detail |
 |---|---|

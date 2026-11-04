@@ -65,7 +65,7 @@ Verification receipt, including planted-failure controls: [DESIGN.md §8](DESIGN
 
 ## Ongoing comms
 
-There is one systemd user timer, `collective-heartbeat.timer`, which runs `heartbeat.py` from this repo (owner Codex 3); there is no cron on Kinoite. It is paused during hardening and resumes only after an accepted deployment; check `systemctl --user is-active collective-heartbeat.timer`. It uses a flexible cadence: every 2 min while the team is active, every 15 min while quiet. It alerts Luke only on changes. See [DESIGN.md §4](DESIGN.md#4-ongoing-comms-the-scheduler).
+There is one systemd user timer, `collective-heartbeat.timer`, which runs `heartbeat.py` from this repo (owner Codex 3); there is no cron on Kinoite. It was paused during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in [Verification](Collective.vault/Evidence/Verification.md)); query current state with `systemctl --user is-active collective-heartbeat.timer`. It uses a flexible cadence: every 2 min while the team is active, every 15 min while quiet. It alerts Luke only on changes. See [DESIGN.md §4](DESIGN.md#4-ongoing-comms-the-scheduler).
 
 Development process (ownership, updates, best-of-N with tuios fan-out): see [DESIGN.md §7](DESIGN.md#7-development-process).
 
