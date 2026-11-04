@@ -166,6 +166,7 @@ HYGIENE = {
     "rfc1918-ip": re.compile(r"\b(10\.\d{1,3}|192\.168|172\.(1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"),
     "tailnet-ip": re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b"),
     "public-ipv4": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),  # filtered by _is_public_ipv4
+    "home-path": re.compile(r"/(?:var/)?home/[A-Za-z_][A-Za-z0-9_.-]*/"),
     "email": re.compile(r"\b[A-Za-z0-9._%+-]+@(?!example\.)[A-Za-z0-9.-]+\.(com|net|org|io|dev|au)\b"),
 }
 TEXT_SUFFIXES = {".py", ".md", ".toml", ".yml", ".yaml", ".json", ".svg", ".canvas", ".txt", ".cfg", ".sh", ""}
@@ -264,6 +265,8 @@ def g_selftest(g: Gate) -> None:
         if rule != "public-ipv4" or _is_public_ipv4(m.group(0))
     ]
     g.detail.append(f"H-public-ipv4: {'fires' if 'public-ipv4' in hyg else 'DID NOT FIRE'}")
+    planted_home = "/".join(["", "var", "home", "someone", "project"])  # noqa: FLY002 - built at runtime so the hygiene gate never sees a home-path literal
+    g.detail.append(f"H-home-path: {'fires' if HYGIENE['home-path'].search(planted_home) else 'DID NOT FIRE'}")
     doc_ok = not _is_public_ipv4("192.0.2.10")
     g.detail.append(f"documentation range allowed: {'yes' if doc_ok else 'NO'}")
     clean = fitness_scan("collective.py", "def run():\n    import subprocess\n    subprocess.run(['x'])\n")
@@ -293,6 +296,17 @@ def g_cmd(g: Gate, argv: list[str], env: dict[str, str] | None = None) -> None:
     g.detail = out.splitlines()[-25:] if out else ["(no output)"]
 
 
+def g_coverage(g: Gate, env: dict[str, str]) -> None:
+    """Require the configured fail_under floor in aggregate and for every production module."""
+    g_cmd(g, [*tool("coverage"), "report"], env)
+    for source in SOURCES:
+        rc, out = run([*tool("coverage"), "report", f"--include={source}"], env)
+        g.ok = g.ok and rc == 0
+        g.detail.append(
+            f"{source}: {'meets' if rc == 0 else 'BELOW'} fail_under ({out.splitlines()[-1] if out else rc})"
+        )
+
+
 def main() -> int:
     """Run the gates in order and print one PASS/FAIL line each."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -316,7 +330,7 @@ def main() -> int:
                 g, [*tool("coverage"), "run", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-q"], env
             ),
         ),
-        ("coverage", lambda g: g_cmd(g, [*tool("coverage"), "report"], env)),
+        ("coverage", lambda g: g_coverage(g, env)),
     ]
     gates: list[Gate] = []
     for name, fn in plan:

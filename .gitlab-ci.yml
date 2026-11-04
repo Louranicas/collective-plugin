@@ -2,16 +2,20 @@
 stages: [gates]
 gates:
   stage: gates
-  image: python:${PY}-slim
+  image: python:${PY}-slim@${PY_DIGEST}
   parallel:
     matrix:
-      - PY: ["3.12", "3.13", "3.14"]
+      - PY: "3.12"
+        PY_DIGEST: sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
+      - PY: "3.13"
+        PY_DIGEST: sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1
+      - PY: "3.14"
+        PY_DIGEST: sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966
   timeout: 15m
   variables:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     GIT_DEPTH: "1"
   before_script:
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null
     - python -m pip install ruff==0.17.3 mypy==2.4.1 bandit==1.9.4 coverage==7.17.1
   script:
     - python -I tools/check.py --keep-going --receipt gates-receipt.json

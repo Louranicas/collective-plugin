@@ -752,10 +752,14 @@ class Backend:
         ]
         if since:
             argv += ["--since-event-id", since]
-        data = self.run(argv)
+        data: object = self.run(argv)
+        events = data.get("events", []) if isinstance(data, dict) else None
+        if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
+            msg = "Malformed MemPalace event response"
+            raise CollectiveError(msg)
         fields = ("id", "type", "from_agent", "to_agent", "correlation_id", "status", "created_at")
         return {
-            "events": [{k: e.get(k) for k in fields} for e in data.get("events", [])],
+            "events": [{k: e.get(k) for k in fields} for e in events],
             "identity": "kinoite-codex (shared; exact pane and correlation must distinguish peers)",
             "cursor": since,
             "limit": 50,
@@ -778,12 +782,16 @@ class Backend:
             ],
             as_json=False,
         )
-        data = self.run([shutil.which("tailscale") or "tailscale", "status", "--json"])
+        data: object = self.run([shutil.which("tailscale") or "tailscale", "status", "--json"])
+        peers = data.get("Peer", {}) if isinstance(data, dict) else None
+        if not isinstance(peers, dict) or not all(isinstance(p, dict) for p in peers.values()):
+            msg = "Malformed Tailscale status response"
+            raise CollectiveError(msg)
         return {
             "units": text.splitlines(),
             "peers": [
                 {"host": p.get("HostName"), "online": p.get("Online"), "last_seen": p.get("LastSeen")}
-                for p in data.get("Peer", {}).values()
+                for p in peers.values()
             ],
             "meaning": "Local state only; no SSH authentication, remote probe, or recovery acceptance",
         }

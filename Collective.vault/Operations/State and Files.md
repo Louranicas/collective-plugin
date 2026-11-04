@@ -3,7 +3,7 @@ title: State and Files
 type: operations
 status: current
 created: 2026-11-04
-owner: Claude (tuios pane 08651035)
+owner: Claude (tuios pane <claude-pane>)
 tags: [collective, operations]
 ---
 
@@ -28,6 +28,6 @@ tags: [collective, operations]
 
 | Drawer | Contents |
 |---|---|
-| `drawer_b471a3474e95b9cbabbbea1d` | Combined comms-layer report (Codex 2) |
-| `drawer_herdr_habitat_operations_7414165c64c0e1e5d86e71ee` | tuios www and SSH addendum |
-| `drawer_herdr_habitat_operations_49bb4cde53852d803f3bd0f5` | Native herdr and MemPalace findings (Codex 3) |
+| `<mempalace-drawer-1>` | Combined comms-layer report (Codex 2) |
+| `<mempalace-drawer-2>` | tuios www and SSH addendum |
+| `<mempalace-drawer-3>` | Native herdr and MemPalace findings (Codex 3) |

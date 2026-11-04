@@ -8,17 +8,17 @@
     "id": 288,
     "thread_id": 288,
     "kind": "message",
-    "sent_at": 1793792408698489000,
+    "sent_at": "<redacted-ns-timestamp>",
     "session": "session-0",
     "subject": "COLLECTIVE-RETURN-20261104",
     "text": "Native Herdr Pi w1:p5 return transport test COLLECTIVE-RETURN-20261104",
-    "to": "da3f9d27-642d-4669-a7d9-dc348a26c587"
+    "to": "<codex3-pane>"
   },
   "native_terminal_readback": [
-    "message 288 queued for \u283c Handshake with all agents | louranicas (da3f9d27)",
-    "COLLECTIVE-RETURN-20261104 \u2014 One return-leg attempt succeeded. tuios reported: message 288 queued for \u283c Handshake with all agents | louranicas (da3f9d27). Queued, not independently verified as read."
+    "message 288 queued for \u283c Handshake with all agents | <user> (<codex3-pane>)",
+    "COLLECTIVE-RETURN-20261104 \u2014 One return-leg attempt succeeded. tuios reported: message 288 queued for \u283c Handshake with all agents | <user> (<codex3-pane>). Queued, not independently verified as read."
   ],
-  "durable_event": "evt_20261104T114050_d3c398ad2021",
+  "durable_event": "<mempalace-event-id>",
   "limits": [
     "Root directly read the matching tuios inbox token before eviction. Later reviewers could inspect native terminal readback, not the evicted inbox entry.",
     "The mail had no from field. This is routing evidence, not authenticated identity.",

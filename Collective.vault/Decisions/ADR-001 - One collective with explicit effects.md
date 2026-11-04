@@ -12,7 +12,7 @@ Return to [[Home]] · [[../Roadmap|Roadmap]] · [[../Communication Map.canvas|Co
 
 The collective coordinates several independent agent sessions. It shares evidence and tasks; it does not share an authenticated model identity or obtain new authority from agreement between agents.
 
-The canonical implementation and this vault live together in `/var/home/louranicas/tuios-setup/collective-plugin`. Each file has one writer, with separate test and workflow reviewers. Earlier experiments in `~/src/herdr-collective` remain separate reference artifacts.
+The canonical implementation and this vault live together in `~/tuios-setup/collective-plugin`. Each file has one writer, with separate test and workflow reviewers. Earlier experiments in `~/src/herdr-collective` remain separate reference artifacts.
 
 ## Adopted boundaries
 

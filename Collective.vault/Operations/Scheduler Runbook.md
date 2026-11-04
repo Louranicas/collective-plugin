@@ -3,7 +3,7 @@ title: Scheduler Runbook
 type: operations
 status: current
 created: 2026-11-04
-owner: Claude (tuios pane 08651035)
+owner: Claude (tuios pane <claude-pane>)
 source: heartbeat.py 7f54355f (owner Codex 3)
 tags: [collective, operations]
 ---
@@ -15,7 +15,7 @@ tags: [collective, operations]
 | Item | Value |
 |---|---|
 | Units | `~/.config/systemd/user/collective-heartbeat.timer` and `.service` |
-| ExecStart | `/usr/bin/python3 -I /var/home/louranicas/tuios-setup/collective-plugin/heartbeat.py` |
+| ExecStart | `/usr/bin/python3 -I ~/tuios-setup/collective-plugin/heartbeat.py` |
 | Installer | `install_monitor.py` (backups and receipt in `~/.local/state/collective-plugin/scheduler-backups/`) |
 | Cadence | 2-min tick; flex gate ([[Operations/Scheduler Runbook]]) |
 | Board | `~/.local/state/collective/heartbeat.json` |
@@ -73,4 +73,6 @@ stateDiagram-v2
 | `needs_you` | 15 min | `needs:<pane>` |
 | herdr agent `blocked` | 15 min | `needs:hblocked:<wN:pN>` |
 | SSH relay in auto-restart | Once a day | `relay:<date>` |
-| `omarchy` online/offline | On change | `peer:omarchy:<bool>` |
+| Watched peer online/offline (`COLLECTIVE_WATCH_PEERS`) | On change | `peer:<host>:<bool>` |
+
+Watched Tailscale peers come from `COLLECTIVE_WATCH_PEERS` (comma-separated host names, empty by default) so no host name is published. Set it locally in a `systemctl --user edit collective-heartbeat.service` drop-in.

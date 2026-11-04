@@ -40,10 +40,10 @@ flowchart TB
 
 | Artifact | Path / behaviour |
 |---|---|
-| Canonical source | `/var/home/louranicas/tuios-setup/collective-plugin/` |
+| Canonical source | `~/tuios-setup/collective-plugin/` |
 | Service source | `heartbeat.py`, adopted by Codex 3 from Claude's reviewed implementation |
 | User units | `~/.config/systemd/user/collective-heartbeat.service` and `.timer` |
-| Execution | `/usr/bin/python3 -I /var/home/louranicas/tuios-setup/collective-plugin/heartbeat.py` |
+| Execution | `/usr/bin/python3 -I ~/tuios-setup/collective-plugin/heartbeat.py` |
 | Cadence | Two-minute timer tick with bounded random delay; full checks on active ticks, every fifteen minutes when quiet |
 | State | `~/.local/state/collective/`: private board, incident/dedup memory and lock |
 | Install receipt and backups | `~/.local/state/collective-plugin/scheduler-install-receipt.json` and `scheduler-backups/` |
@@ -105,8 +105,8 @@ The established laptop coordination directory is `~/.local/state/ssh-hardening/c
 
 Authoritative source notes:
 
-- `/var/home/louranicas/SSH.vault/Operations/SSH team security and working protocol.md`
-- `/var/home/louranicas/SSH.vault/Operations/Travel developer access and independent recovery.md`
-- `/var/home/louranicas/SSH.vault/Operations/Host Trust Verification and Pending Laptop Operator Run 2026-10-28.md`
+- `~/SSH.vault/Operations/SSH team security and working protocol.md`
+- `~/SSH.vault/Operations/Travel developer access and independent recovery.md`
+- `~/SSH.vault/Operations/Host Trust Verification and Pending Laptop Operator Run 2026-10-28.md`
 
 The Herdr SSH MCPv2 planning note records source-present/inactive code, not a deployed remote actuation channel. Never derive fresh SSH readiness from a screenshot, matching username, active service or architecture drawing.

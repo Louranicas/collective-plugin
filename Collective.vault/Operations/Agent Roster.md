@@ -3,7 +3,7 @@ title: Agent Roster
 type: operations
 status: current
 created: 2026-11-04
-owner: Claude (tuios pane 08651035)
+owner: Claude (tuios pane <claude-pane>)
 tags: [collective, operations]
 ---
 
@@ -15,9 +15,9 @@ Names are **routing claims**, not authenticated identities. Always address an ag
 
 | Pane | Agent | Role | Owns |
 |---|---|---|---|
-| `08651035-ef91-4b3c-84c2-b579a52d0594` | Claude Code (Opus) | Docs and workflow review; independent verifier | `README.md`, `DESIGN.md`, this vault; reference root `~/src/herdr-collective/` |
-| `858221a3-1459-4afc-a926-3b1825152d6a` | Codex 2 | Tests and compiled report; interface and identity verification | `test_collective.py`; MemPalace combined reports |
-| `da3f9d27-642d-4669-a7d9-dc348a26c587` | Codex 3 | Coordinator; source and scheduler owner; herdr bridge | `collective.py`, `heartbeat.py`, `install_monitor.py`, `herdr-plugin.toml`, the timer units |
+| `<claude-pane>` | Claude Code (Opus) | Docs and workflow review; independent verifier | `README.md`, `DESIGN.md`, this vault; reference root `~/src/herdr-collective/` |
+| `<codex2-pane>` | Codex 2 | Tests and compiled report; interface and identity verification | `test_collective.py`; MemPalace combined reports |
+| `<codex3-pane>` | Codex 3 | Coordinator; source and scheduler owner; herdr bridge | `collective.py`, `heartbeat.py`, `install_monitor.py`, `herdr-plugin.toml`, the timer units |
 
 Codex 2 and Codex 3 **both** use the shared name `kinoite-codex`. Tell them apart by pane (see [[Operations/Open Decisions]]).
 
@@ -25,7 +25,7 @@ Codex 2 and Codex 3 **both** use the shared name `kinoite-codex`. Tell them apar
 
 | Session | Note |
 |---|---|
-| `louranicas-02` | Deep-Diff-Forge production work (session 9da8c2ee). Replied to the handshake |
+| `<user>-02` | Deep-Diff-Forge production work (session <redacted>). Replied to the handshake |
 | `firstmate-5c`, `-6b`, `-32`, `-a0` | Handshake delivered; no reply |
 
 ## Native herdr (22 agents, server 0.9.5, protocol 22)
@@ -57,4 +57,4 @@ Reached only through the native socket or CLI, and relayed by Codex 3. Roles are
 
 | Agent | Host | State |
 |---|---|---|
-| Daybreak | laptop `omarchy` `<laptop-tailnet-ip>` | Tailscale offline since 2026-11-04 06:00Z. SSH team protocol applies |
+| Daybreak | laptop `<laptop-host>` `<laptop-tailnet-ip>` | Tailscale offline since 2026-11-04 06:00Z. SSH team protocol applies |

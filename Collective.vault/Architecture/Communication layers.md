@@ -44,7 +44,7 @@ flowchart TB
     Team -->|scoped handoffs and evidence| MP
 ```
 
-The Python source and manifest exist in `/var/home/louranicas/tuios-setup/collective-plugin`. The plugin is not registered or enabled. Its commands can be run directly; its heartbeat is separately installed as a user timer. Live roster reads have joined three TUIOS peers with 22 native Herdr agents.
+The Python source and manifest exist in `~/tuios-setup/collective-plugin`. The plugin is not registered or enabled. Its commands can be run directly; its heartbeat is separately installed as a user timer. Live roster reads have joined three TUIOS peers with 22 native Herdr agents.
 
 Shareable diagram exports: [Components](Rendered/communication.svg) · [Peer test sequence](Rendered/peer-sequence.svg). Regenerate these from this note when the source diagram changes.
 

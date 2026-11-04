@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """collective heartbeat: a read-only comms health check, run by a systemd --user timer.
 
-Original implementation: Claude (tuios pane 08651035), task card t4.
+Original implementation: Claude (tuios docs pane), task card t4.
 Current source/scheduler owner: Codex 3; reviewers: Claude and Codex 2.
 
 Each run:
@@ -42,10 +42,12 @@ STALE_MAIL_S = 30 * 60
 NEEDS_YOU_S = 15 * 60
 RELAY_REPEAT_S = 24 * 3600
 RELAY_UNITS = ("ssh-independent-relay-machine-tunnel.service", "ssh-independent-relay-machine-connector.service")
-WATCH_PEERS = ("omarchy",)  # Daybreak's laptop
+WATCH_PEERS = tuple(p for p in os.environ.get("COLLECTIVE_WATCH_PEERS", "").split(",") if p)
 SESSION = os.environ.get("COLLECTIVE_SESSION", "session-0")  # pinned; never sent --from a pane
 # Alert keys with these prefixes are cleared when the condition resolves, so a recurrence alerts again.
 RESOLVABLE = ("mail:", "needs:", "peer:", "tuios-read", "herdr-read")
+# One-shot transition alerts stay pending until a notice carrying them is delivered.
+TRANSIENT = ("peer:", "ring-loss:")
 # FLEX cadence (Luke, 2026-11-04): the timer ticks every 2 min. A full run happens every tick while the
 # collective is ACTIVE, and at most every QUIET_FULL_S while it is quiet. Alerts stay change-only.
 ACTIVE_MAIL_S = 15 * 60
@@ -300,6 +302,7 @@ class MemoryState(TypedDict):
     unread_since: dict[str, float]
     needs_since: dict[str, float]
     sent: dict[str, float]
+    pending: dict[str, str]
     peers: dict[str, bool]
     last_full: float
     mode: str
@@ -327,10 +330,16 @@ def memory_state(value: object) -> MemoryState:
         isinstance(k, str) and type(v) is bool for k, v in peer_values.items()
     ):
         raise ValueError("Malformed heartbeat peers")
+    pending = value.get("pending", {})
+    if not isinstance(pending, dict) or not all(
+        isinstance(k, str) and k.startswith(TRANSIENT) and isinstance(v, str) for k, v in pending.items()
+    ):
+        raise ValueError("Malformed heartbeat pending alerts")
     return {
         "unread_since": maps["unread_since"],
         "needs_since": maps["needs_since"],
         "sent": maps["sent"],
+        "pending": pending,
         "peers": peer_values,
         "last_full": number(value.get("last_full")),
         "mode": "starting",
@@ -380,7 +389,8 @@ def agent_rows(
                 "heartbeat could not read tuios; mail and agent state UNKNOWN (not proof of delivery failure)",
             )
         )
-        ag = []
+        known = mem["unread_since"].keys() | mem["needs_since"].keys()
+        return rows, {k for k in known if not k.startswith("hblocked:")}
     live: set[str] = set()
     for a in ag:
         wid = optional_string(a.get("window_id")) or ""
@@ -422,6 +432,7 @@ def native_alerts(
     live: set[str] = set()
     if ha is None:
         alerts.append(("herdr-read", "heartbeat could not read the native herdr socket; herdr agent state UNKNOWN"))
+        live = {k for k in mem["needs_since"] if k.startswith("hblocked:")}
     else:
         for h in ha:
             key = f"hblocked:{h['pane']}"
@@ -575,13 +586,18 @@ def ring_alert(mem: MemoryState, alerts: list[tuple[str, str]]) -> None:
 
 def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, str]], now: float, *, dry: bool) -> int:
     """Deduplicate alerts and atomically publish private scheduler state."""
+    fresh = {k.rsplit(":", 1)[0] for k, _ in alerts if k.startswith(TRANSIENT)}
+    alerts = alerts + [(k, t) for k, t in mem["pending"].items() if k.rsplit(":", 1)[0] not in fresh]
     active = {k for k, _ in alerts}
     # Resolved conditions are forgotten so the same problem recurring later alerts again.
+    # A condition whose age is still tracked (including through a failed read) keeps its key.
     # Peer keys stay until the opposite transition replaces them; relay keys expire by day.
+    tracked = {f"mail:{k}" for k in mem["unread_since"]} | {f"needs:{k}" for k in mem["needs_since"]}
     mem["sent"] = {
         k: v
         for k, v in mem["sent"].items()
-        if (k in active or not k.startswith(RESOLVABLE) or k.startswith("peer:")) and now - v < RELAY_REPEAT_S * 2
+        if (k in active or k in tracked or not k.startswith(RESOLVABLE) or k.startswith("peer:"))
+        and now - v < RELAY_REPEAT_S * 2
     }
     for h in WATCH_PEERS:
         if f"peer:{h}:True" in active:
@@ -596,6 +612,7 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
     save("heartbeat.json", board)
     if new:
         notify(new, mem, now)
+    mem["pending"] = {k: t for k, t in alerts if k.startswith(TRANSIENT) and k not in mem["sent"]}
     save("memory.json", mem)
     return 0
 

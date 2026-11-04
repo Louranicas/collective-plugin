@@ -3,13 +3,13 @@ title: Collective
 type: home
 status: current
 created: 2026-11-04
-owner: Claude (tuios pane 08651035)
+owner: Claude (tuios pane <claude-pane>)
 tags: [collective, home]
 ---
 
 # Collective
 
-This is the ongoing reference for the agent collective on Luke's desktop (`orac-synth-dev`). The canonical vault is versioned with the code in `~/tuios-setup/collective-plugin/`. **The source governs:** where a note disagrees with the code, the code wins, and the note gets a dated correction.
+This is the ongoing reference for the agent collective on Luke's desktop (`<desktop-host>`). The canonical vault is versioned with the code in `~/tuios-setup/collective-plugin/`. **The source governs:** where a note disagrees with the code, the code wins, and the note gets a dated correction.
 
 ## Overview
 

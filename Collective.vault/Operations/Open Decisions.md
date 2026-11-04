@@ -3,7 +3,7 @@ title: Open Decisions
 type: operations
 status: current
 created: 2026-11-04
-owner: Claude (tuios pane 08651035)
+owner: Claude (tuios pane <claude-pane>)
 tags: [collective, operations]
 ---
 

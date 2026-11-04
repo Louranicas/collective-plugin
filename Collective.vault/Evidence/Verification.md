@@ -3,8 +3,8 @@ title: Verification
 type: evidence
 status: current
 created: 2026-11-04
-owner: Claude (tuios pane 08651035)
-verifier: Claude (08651035); builder Codex 3; tester Codex 2
+owner: Claude (tuios pane <claude-pane>)
+verifier: Claude (<claude-pane>); builder Codex 3; tester Codex 2
 tags: [collective, evidence]
 ---
 
@@ -53,7 +53,7 @@ Codex 2's independent negative-control receipt and artifact ids are appended her
 
 | Date | Verifier | Subject | Result | Artifacts |
 |---|---|---|---|---|
-| 2026-11-04 | Codex 2 (858221a3), independent of the builder | Code: `collective.py` fb9d36d2, `heartbeat.py` 7f54355f, `test_collective.py` 5f899b49 | Malformed-shape test **seen red** (messages #193/#195), then green: **36 PASS** | Test-patch correlation `collective-plugin-tests-20261104`; MemPalace verification drawer `77d51a93d65b3279c317029b` |
+| 2026-11-04 | Codex 2 (<codex2-pane>), independent of the builder | Code: `collective.py` fb9d36d2, `heartbeat.py` 7f54355f, `test_collective.py` 5f899b49 | Malformed-shape test **seen red** (messages #193/#195), then green: **36 PASS** | Test-patch correlation `collective-plugin-tests-20261104`; MemPalace verification drawer `<mempalace-drawer-id>` |
 | 2026-11-04 | Codex 2 | This vault at the time of the check | 13 Markdown notes; **12/12** Mermaid blocks render with `tuios mermaid`; **54** local and wiki links resolve, 0 broken; Canvas JSON ids unique, edges valid; 12 SVGs parse as XML | Reported in tuios #238 |
 
 > Counts are point-in-time. Claude's #233 figure ("14 notes + canvas") and Codex 2's 13 differ only by counting method and date. Cite the dated row, not a hard-coded total.
@@ -142,6 +142,8 @@ The tuios mail ring (256 messages / 512 KiB) overflowed repeatedly: more than 10
 
 The low private-directory finding above is corrected: existing private proof/backup modes were repaired to 0600/0700. A new behavioral regression first failed on a newly created intermediate directory (0755), then passed after `private_dir` created each missing ancestor privately while preserving existing ancestor modes. The suite now contains **83 tests**; all nine local gates pass. Earlier source hashes and mutation counts remain dated receipts, not claims about later revisions.
 
-`proof/native-return.json` retains the exact selected message #288 metadata witnessed by Codex 3 and a fresh native terminal readback. The mail carried no authenticated sender. `proof/plugin-activation.json` records successful capabilities **and dashboard** actions in both runtimes; roster, Atuin, MemPalace and local SSH observations returned successfully. `proof/runtime-sandbox.json` records named kernel refusal probes and the timer/service acceptance.
+`proof/native-return.json` retains the selected message #288 metadata witnessed by Codex 3, with pane, user, timestamp and MemPalace event identifiers replaced by placeholders for publication, and a fresh native terminal readback. The mail carried no authenticated sender. `proof/plugin-activation.json` records successful capabilities **and dashboard** actions in both runtimes; roster, Atuin, MemPalace and local SSH observations returned successfully. `proof/runtime-sandbox.json` records named kernel refusal probes and the timer/service acceptance.
 
 The public source candidate still requires the independent no-mistakes pipeline and remote CI; local green checks are not a claim that remote validation has run.
+
+Publication redaction (2026-11-04): pane UUIDs, host names, the local user name, absolute home paths, session and MemPalace identifiers were replaced with placeholders across the vault, docs and proof. The `ssh-state-1.svg` host labels were edited in place to match the redacted Mermaid source rather than re-rendered, and `Assets/render-receipt.json` was re-bound to the new source and SVG hashes.

@@ -3,7 +3,7 @@ title: SSH State
 type: operations
 status: current
 created: 2026-11-04
-owner: Claude (tuios pane 08651035)
+owner: Claude (tuios pane <claude-pane>)
 source: SSH.vault/Operations + live read 2026-11-04
 tags: [collective, operations]
 ---
@@ -14,13 +14,13 @@ tags: [collective, operations]
 
 ```mermaid
 flowchart LR
-    subgraph Desktop["orac-synth-dev <desktop-tailnet-ip> / <desktop-lan-ip>"]
+    subgraph Desktop["<desktop-host> <desktop-tailnet-ip> / <desktop-lan-ip>"]
         KC["kinoite-codex<br/>(desktop SSH owner)"]
         SN["sshd-native-recovery<br/>:22 LAN + loopback · active"]
         RT["relay-machine-tunnel/connector<br/>auto-restart ~8.7k ×"]
     end
 
-    subgraph Laptop["omarchy <laptop-tailnet-ip> / <laptop-lan-ip>"]
+    subgraph Laptop["<laptop-host> <laptop-tailnet-ip> / <laptop-lan-ip>"]
         DB["Daybreak<br/>(laptop owner)"]
         CD[("~/.local/state/ssh-hardening/<br/>coordination/")]
     end

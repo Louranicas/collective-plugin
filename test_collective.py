@@ -16,8 +16,8 @@ from unittest import mock
 import collective as c
 import heartbeat as hb
 
-SENDER = "858221a3-1459-4afc-a926-3b1825152d6a"
-RECIPIENT = "da3f9d27-642d-4669-a7d9-dc348a26c587"
+SENDER = "11111111-1111-4111-8111-111111111111"
+RECIPIENT = "22222222-2222-4222-8222-222222222222"
 NOW = 1800000000
 
 

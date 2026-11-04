@@ -83,6 +83,25 @@ class CoreTransportTests(unittest.TestCase):
         self.assertNotIn("NEVER-RETURN", json.dumps(result))
         self.assertEqual(run.call_args.args[0][-2:], ["--since-event-id", "event-previous"])
 
+    def test_malformed_memory_and_tailscale_shapes_are_refused(self) -> None:
+        backend = core.Backend()
+        events: list[Any] = [[], {"events": {}}, {"events": ["bad"]}]
+        for value in events:
+            with (
+                self.subTest(value=value),
+                mock.patch.object(backend, "run", return_value=value),
+                self.assertRaisesRegex(core.CollectiveError, "MemPalace"),
+            ):
+                backend.memory(None)
+        statuses: list[Any] = [[], {"Peer": []}, {"Peer": {"p": "bad"}}]
+        for value in statuses:
+            with (
+                self.subTest(value=value),
+                mock.patch.object(backend, "run", side_effect=["Id=x\n", value]),
+                self.assertRaisesRegex(core.CollectiveError, "Tailscale"),
+            ):
+                backend.ssh_health()
+
     def test_ssh_observation_does_not_connect(self) -> None:
         backend = core.Backend()
         with mock.patch.object(
@@ -459,12 +478,15 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(mock.patch.object(heartbeat, "STATE", self.state))
+        self.stack.enter_context(mock.patch.object(heartbeat, "WATCH_PEERS", ("fixture-peer",)))
         self.stack.enter_context(mock.patch.object(sys, "argv", ["heartbeat.py", "--full"]))
         self.clock = self.stack.enter_context(mock.patch.object(time, "time", return_value=10000))
         self.agents = self.stack.enter_context(mock.patch.object(heartbeat, "agents", return_value=[]))
         self.native = self.stack.enter_context(mock.patch.object(heartbeat, "herdr_agents", return_value=[]))
         self.relay = self.stack.enter_context(mock.patch.object(heartbeat, "relay", return_value={}))
-        self.peers = self.stack.enter_context(mock.patch.object(heartbeat, "peers", return_value={"omarchy": True}))
+        self.peers = self.stack.enter_context(
+            mock.patch.object(heartbeat, "peers", return_value={"fixture-peer": True})
+        )
         self.stack.enter_context(mock.patch.object(heartbeat, "activity", return_value=(True, ["fixture-active"])))
         self.send = mock.Mock(return_value=(0, ""))
 
@@ -500,7 +522,7 @@ class HeartbeatLifecycle(unittest.TestCase):
 
     def test_peer_transition_and_native_unknown_are_change_only(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
-        self.peers.return_value = {"omarchy": False}
+        self.peers.return_value = {"fixture-peer": False}
         self.native.return_value = None
         self.agents.return_value = None
         self.assertEqual(heartbeat.main(), 0)
@@ -510,6 +532,42 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.assertIn("SSH reachability unverified", body)
         self.assertEqual(heartbeat.main(), 0)
         self.assertEqual(self.send.call_count, 1)
+
+    def test_transition_raised_during_backoff_is_delivered_later(self) -> None:
+        self.assertEqual(heartbeat.main(), 0)
+        memory: dict[str, Any] = heartbeat.load("memory.json", {})
+        memory["notice_failures"], memory["notice_attempt"] = 1, self.clock.return_value
+        heartbeat.save("memory.json", memory)
+        self.peers.return_value = {"fixture-peer": False}
+        self.clock.return_value += 120
+        self.assertEqual(heartbeat.main(), 0)
+        self.send.assert_not_called()
+        self.clock.return_value += 3600
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertIn("offline", self.send.call_args.args[0][-1])
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_failed_reads_keep_ages_and_suppress_repeat_notices(self) -> None:
+        self.agents.return_value = [{"window_id": "pane", "unread": 2, "harness_id": "fixture"}]
+        self.native.return_value = [{"pane": "native", "agent": "fixture", "status": "blocked"}]
+        self.assertEqual(heartbeat.main(), 0)
+        self.clock.return_value += heartbeat.STALE_MAIL_S + 1
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 1)
+        self.agents.return_value = None
+        self.native.return_value = None
+        self.clock.return_value += 120
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 2)
+        memory: dict[str, Any] = heartbeat.load("memory.json", {})
+        self.assertEqual(memory["unread_since"], {"pane": 10000})
+        self.assertEqual(memory["needs_since"], {"hblocked:native": 10000})
+        self.agents.return_value = [{"window_id": "pane", "unread": 2, "harness_id": "fixture"}]
+        self.native.return_value = [{"pane": "native", "agent": "fixture", "status": "blocked"}]
+        self.clock.return_value += heartbeat.STALE_MAIL_S + 1
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 2)
 
     def test_quiet_tick_skips_expensive_collectors(self) -> None:
         with (
@@ -552,7 +610,14 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.agents.assert_not_called()
 
     def test_untrusted_memory_schema_is_refused_before_effect(self) -> None:
-        values: list[Any] = [[], {"sent": []}, {"needs_since": {"pane": True}}, {"peers": {"host": "true"}}]
+        values: list[Any] = [
+            [],
+            {"sent": []},
+            {"needs_since": {"pane": True}},
+            {"peers": {"host": "true"}},
+            {"pending": {"mail:pane": "not transient"}},
+            {"pending": {"peer:host:True": 1}},
+        ]
         for value in values:
             with self.subTest(value=value):
                 heartbeat.save("memory.json", value)

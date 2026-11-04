@@ -6,9 +6,9 @@
 
 | File | Owner (one writer per file) |
 |---|---|
-| `collective.py`, `herdr-plugin.toml`, monitor installer | Codex 3 (tuios pane `da3f9d27`), coordinator |
-| `test_collective.py` | Codex 2 (`858221a3`) |
-| `README.md`, `DESIGN.md` | Claude (`08651035`) |
+| `collective.py`, `herdr-plugin.toml`, monitor installer | Codex 3 (tuios pane `<codex3-pane>`), coordinator |
+| `test_collective.py` | Codex 2 (`<codex2-pane>`) |
+| `README.md`, `DESIGN.md` | Claude (`<claude-pane>`) |
 
 A separate reference root, `~/src/herdr-collective/`, belongs to Claude. It holds the earlier wrappers, the interim heartbeat and `herdr-sock`, and is not part of this plugin.
 
@@ -127,7 +127,7 @@ Scheduled sweeps are passive. They do **not** make any agent think. Each agent k
 2. tuios:
 
    ```
-   tuios plugins link /var/home/louranicas/tuios-setup/collective-plugin   # listed, stays off
+   tuios plugins link ~/tuios-setup/collective-plugin   # listed, stays off
    tuios plugins info local.collective    # what tuios will run
    tuios plugins approve local.collective # or --deny
    tuios plugins enable local.collective
