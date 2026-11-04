@@ -362,6 +362,18 @@ class HeartbeatTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+    def test_watched_peer_list_strips_whitespace_and_empty_entries(self) -> None:
+        env = {**os.environ, "COLLECTIVE_WATCH_PEERS": " fixture-a, fixture-b ,, "}
+        result = subprocess.run(
+            [sys.executable, "-c", "import heartbeat; print(list(heartbeat.WATCH_PEERS))"],
+            cwd=Path(heartbeat.__file__).parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "['fixture-a', 'fixture-b']")
+
 
 class AdversarialBoundaries(unittest.TestCase):
     def test_combined_child_output_is_bounded(self) -> None:
@@ -547,6 +559,25 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.assertIn("offline", self.send.call_args.args[0][-1])
         self.assertEqual(heartbeat.main(), 0)
         self.assertEqual(self.send.call_count, 1)
+
+    def test_transition_survives_crash_after_pre_send_save(self) -> None:
+        self.assertEqual(heartbeat.main(), 0)
+        self.peers.return_value = {"fixture-peer": False}
+        self.send.side_effect = SystemExit(1)
+        with self.assertRaises(SystemExit):
+            heartbeat.main()
+        memory: dict[str, Any] = heartbeat.load("memory.json", {})
+        self.assertEqual(memory["peers"], {"fixture-peer": False})
+        self.assertIn("peer:fixture-peer:False", memory["pending"])
+        self.send.side_effect = None
+        self.clock.return_value += 3600
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 2)
+        self.assertIn("offline", self.send.call_args.args[0][-1])
+        memory = heartbeat.load("memory.json", {})
+        self.assertEqual(memory["pending"], {})
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 2)
 
     def test_failed_reads_keep_ages_and_suppress_repeat_notices(self) -> None:
         self.agents.return_value = [{"window_id": "pane", "unread": 2, "harness_id": "fixture"}]
@@ -774,7 +805,8 @@ class RefusalAndRecovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             unsafe = root / "unsafe"
-            unsafe.mkdir(mode=0o755)
+            unsafe.mkdir()
+            unsafe.chmod(0o755)
             with self.assertRaises(core.CollectiveError):
                 core.private_dir(unsafe)
             unsafe.chmod(0o700)
@@ -784,6 +816,7 @@ class RefusalAndRecovery(unittest.TestCase):
                 core.private_dir(link)
             path = root / "plan"
             path.write_text("{}")
+            path.chmod(0o644)
             with self.assertRaises(core.CollectiveError):
                 core.read_private_json(path)
 
@@ -941,15 +974,17 @@ class DeliveryOutcomeClassification(unittest.TestCase):
 
 class PrivateDirectoryCreation(unittest.TestCase):
     def test_new_intermediate_directories_are_private_existing_ancestors_unchanged(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            existing = Path(tmp) / "existing"
-            existing.mkdir(mode=0o755)
-            target = existing / "private" / "nested"
-            previous = os.umask(0o022)
-            try:
-                self.assertEqual(core.private_dir(target), target)
-            finally:
-                os.umask(previous)
-            self.assertEqual(existing.stat().st_mode & 0o777, 0o755)
-            self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
-            self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+        for umask in (0o022, 0o077):
+            with self.subTest(umask=oct(umask)), tempfile.TemporaryDirectory() as tmp:
+                existing = Path(tmp) / "existing"
+                existing.mkdir()
+                existing.chmod(0o755)
+                target = existing / "private" / "nested"
+                previous = os.umask(umask)
+                try:
+                    self.assertEqual(core.private_dir(target), target)
+                finally:
+                    os.umask(previous)
+                self.assertEqual(existing.stat().st_mode & 0o777, 0o755)
+                self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(target.stat().st_mode & 0o777, 0o700)

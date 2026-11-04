@@ -42,7 +42,7 @@ STALE_MAIL_S = 30 * 60
 NEEDS_YOU_S = 15 * 60
 RELAY_REPEAT_S = 24 * 3600
 RELAY_UNITS = ("ssh-independent-relay-machine-tunnel.service", "ssh-independent-relay-machine-connector.service")
-WATCH_PEERS = tuple(p for p in os.environ.get("COLLECTIVE_WATCH_PEERS", "").split(",") if p)
+WATCH_PEERS = tuple(p.strip() for p in os.environ.get("COLLECTIVE_WATCH_PEERS", "").split(",") if p.strip())
 SESSION = os.environ.get("COLLECTIVE_SESSION", "session-0")  # pinned; never sent --from a pane
 # Alert keys with these prefixes are cleared when the condition resolves, so a recurrence alerts again.
 RESOLVABLE = ("mail:", "needs:", "peer:", "tuios-read", "herdr-read")
@@ -609,10 +609,11 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
         print(json.dumps(board, indent=2))
         print("WOULD SEND:" if new else "nothing new to send", *[t for _, t in new], sep="\n  ")
         return 0
+    mem["pending"] = {k: t for k, t in alerts if k.startswith(TRANSIENT) and k not in mem["sent"]}
     save("heartbeat.json", board)
     if new:
         notify(new, mem, now)
-    mem["pending"] = {k: t for k, t in alerts if k.startswith(TRANSIENT) and k not in mem["sent"]}
+        mem["pending"] = {k: t for k, t in mem["pending"].items() if k not in mem["sent"]}
     save("memory.json", mem)
     return 0
 

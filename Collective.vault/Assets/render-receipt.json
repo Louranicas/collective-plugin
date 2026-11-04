@@ -67,7 +67,7 @@
     "source_sha256": "6489449258a257eb5bee38eba960f3ee7ed3cc0ebce3d652f5afb11915b50b0a",
     "diagram": 1,
     "svg": "Assets/ssh-state-1.svg",
-    "sha256": "7e242aa165753c9882422af78e6b22405d8fbd2aa8a3ed75ef57f170715cc125"
+    "sha256": "009ae039e3a4defc4946ea5d1c42f31c463358c9c14fe6dd235da00c4eb3235a"
   },
   {
     "source": "Operations/Scheduler Runbook.md",
