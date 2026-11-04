@@ -190,6 +190,37 @@ class NoticeStateTests(unittest.TestCase):
         self.assertIn(identifier(20), {record["request_id"] for record in result})
         self.assertEqual(existing, before)
 
+    def test_capacity_prunes_released_unknown_after_terminal_but_never_held_unknown(self) -> None:
+        existing = [intent(index) for index in range(notices.MAX_RECORDS)]
+        existing = notices.load_records(notices.finish(existing, identifier(50), status="refused"))
+        existing = notices.resolve_keys(existing, {"mail:p30", "mail:p40"})
+        result = notices.reserve(
+            existing,
+            request_id=identifier(200),
+            digest="c" * 64,
+            keys=["new"],
+            boot_id="boot",
+            endpoint="local",
+            now=200,
+        )
+        kept = {record["request_id"] for record in result}
+        self.assertNotIn(identifier(50), kept)
+        self.assertIn(identifier(30), kept)
+        result = notices.finish(result, identifier(200), status="unknown")
+        result = notices.reserve(
+            result,
+            request_id=identifier(201),
+            digest="d" * 64,
+            keys=["newer"],
+            boot_id="boot",
+            endpoint="local",
+            now=201,
+        )
+        kept = {record["request_id"] for record in result}
+        self.assertNotIn(identifier(30), kept)
+        self.assertIn(identifier(40), kept)
+        self.assertTrue(all(record["held_keys"] for record in result if record["request_id"] != identifier(40)))
+
     def test_byte_capacity_refuses_oversized_persisted_state(self) -> None:
         records = [intent(index, keys=[("🧪" * 250) + str(index)]) for index in range(25)]
         with self.assertRaisesRegex(ValueError, "64 KiB"):

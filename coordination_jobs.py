@@ -368,7 +368,7 @@ def main() -> int:
     try:
         receipt = run_job(args.job)
         print(json.dumps({"job": args.job, "status": receipt["status"]}))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, monitor.CollectiveError) as exc:
         print(json.dumps({"status": "failed", "error": type(exc).__name__}), file=sys.stderr)
         return 1
     return 1 if receipt["status"] in {"failed", "degraded"} else 0

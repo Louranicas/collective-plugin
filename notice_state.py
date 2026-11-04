@@ -180,11 +180,13 @@ def resolve_keys(records: list[NoticeRecord], explicitly_resolved: set[str]) -> 
 def _prune(records: list[NoticeRecord]) -> list[NoticeRecord]:
     while len(records) > MAX_RECORDS or _size(records) > MAX_BYTES:
         candidates = [
-            (record["created_at"], index) for index, record in enumerate(records) if record["status"] in _TERMINAL
+            (record["status"] not in _TERMINAL, record["created_at"], index)
+            for index, record in enumerate(records)
+            if record["status"] in _TERMINAL or (record["status"] == "unknown" and not record["held_keys"])
         ]
         if not candidates:
             raise ValueError("Notice journal capacity exhausted; unresolved outcomes require review")
-        records.pop(min(candidates)[1])
+        records.pop(min(candidates)[2])
     return records
 
 

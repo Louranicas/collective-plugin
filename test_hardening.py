@@ -764,6 +764,25 @@ class CoverageGateTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("small.py: BELOW") for line in gate.detail))
 
 
+class HistoryGateTests(unittest.TestCase):
+    def test_oversized_outgoing_and_tracked_text_fail_closed(self) -> None:
+        spec = importlib.util.spec_from_file_location("collective_gates", Path(__file__).parent / "tools/check.py")
+        assert spec is not None
+        assert spec.loader is not None
+        gates = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {spec.name: gates}):
+            spec.loader.exec_module(gates)
+        oversized = b"x" * gates.MAX_SCAN_BYTES + b"\n"
+        found = gates.history_scan([("big.log@0123abcd", oversized), ("small.md@0123abcd", b"clean\n")])
+        self.assertEqual([(f.rule, f.path) for f in found], [("HH-unscanned-oversize", "big.log@0123abcd")])
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gates, "ROOT", Path(tmp)):
+            big, small = Path(tmp) / "big.md", Path(tmp) / "small.md"
+            big.write_bytes(oversized)
+            small.write_text("clean\n", encoding="utf-8")
+            found = gates.hygiene_scan([big, small])
+        self.assertEqual([(f.rule, f.path) for f in found], [("H-unscanned-oversize", "big.md")])
+
+
 class HeartbeatTests(unittest.TestCase):
     def test_command_errors_are_unknown_not_success(self) -> None:
         for error in (OSError("missing"), subprocess.TimeoutExpired("fixture", 1)):
@@ -1010,7 +1029,7 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.assertEqual(heartbeat.main(), 0)
         self.assertEqual(self.send.call_count, 1)
 
-    def test_legacy_uncertain_notice_holds_new_transitions_after_upgrade(self) -> None:
+    def test_legacy_uncertain_notice_acknowledges_active_alerts_then_releases_hold(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
         memory: dict[str, Any] = heartbeat.load("memory.json", {})
         memory["notice_failures"], memory["notice_attempt"] = 1, self.clock.return_value
@@ -1021,14 +1040,17 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.clock.return_value += 120
         self.assertEqual(heartbeat.main(), 0)
         self.send.assert_not_called()
+        memory = heartbeat.load("memory.json", {})
+        self.assertFalse(memory["notice_legacy_hold"])
+        self.assertIn("peer:fixture-peer:False", memory["sent"])
+        self.assertNotIn("peer:fixture-peer:False", memory["pending"])
         self.clock.return_value += 3600
         self.assertEqual(heartbeat.main(), 0)
         self.send.assert_not_called()
-        memory = heartbeat.load("memory.json", {})
-        self.assertTrue(memory["notice_legacy_hold"])
-        self.assertIn("peer:fixture-peer:False", memory["pending"])
+        self.peers.return_value = {"fixture-peer": True}
+        self.clock.return_value += 120
         self.assertEqual(heartbeat.main(), 0)
-        self.send.assert_not_called()
+        self.assertEqual(self.send.call_count, 1)
 
     def test_transition_survives_crash_after_pre_send_save(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
@@ -1867,6 +1889,22 @@ class HeartbeatNoticeOutcomeRegressions(unittest.TestCase):
         self.assertEqual(len(self.sent_calls), 2)
         self.assertEqual(recovered["notices"][-1]["status"], "submitted")
         self.assertEqual(recovered["notices"][-1]["message_id"], 43)
+
+    def test_unknown_notice_releases_resolved_read_and_job_alerts_so_recurrence_alerts(self):
+        for key in ("tuios-read", "herdr-read", "jobs:collaboration", "jobs:installation"):
+            with self.subTest(key=key):
+                alert = [(key, f"Fixture {key} unavailable")]
+                self.response, self.sent_calls = (99, ""), []
+                memory = self.memory()
+                heartbeat.finish({}, memory, alert, 10000, dry=False)
+                self.assertEqual(memory["notices"][-1]["held_keys"], [key])
+                heartbeat.finish({}, memory, [], 10060, dry=False)
+                self.assertEqual(memory["notices"][-1]["held_keys"], [])
+                self.assertEqual(memory["notices"][-1]["status"], "unknown")
+                self.response = (0, '{"message_id":44}')
+                heartbeat.finish({}, memory, alert, 10120, dry=False)
+                self.assertEqual(len(self.sent_calls), 2)
+                self.assertEqual(memory["notices"][-1]["status"], "submitted")
 
     def test_new_alert_is_not_starved_or_mixed_into_an_unknown_batch(self):
         first = ("peer:fixture:False", "First unknown alert")

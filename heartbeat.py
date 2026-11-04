@@ -716,9 +716,6 @@ def notice_batch(new: list[tuple[str, str]], *, request_id: str = "") -> tuple[l
 
 def notify(new: list[tuple[str, str]], mem: MemoryState, now: float) -> None:
     """Journal one fixed-human notice; uncertain effects are held, never automatically retried."""
-    if mem["notice_legacy_hold"]:
-        mem["notice_issue"] = "Legacy notice attempt has no receipt binding; held pending inbox reconciliation."
-        return
     backoff = min(3600, 300 * 2 ** min(mem["notice_failures"], 4))
     last = mem["notices"][-1]["status"] if mem["notices"] else ""
     if last == "refused" and mem["notice_failures"] and now - mem["notice_attempt"] < backoff:
@@ -891,7 +888,6 @@ def notice_summary(mem: MemoryState) -> dict[str, object]:
         "records": len(mem["notices"]),
         "unknown_outcomes": sum(r["status"] == "unknown" for r in mem["notices"]),
         "held_alerts": len(_notice_state.held_keys(mem["notices"])),
-        "legacy_unknown_hold": mem["notice_legacy_hold"],
         "issue": mem["notice_issue"],
         "meaning": "Stored submission is not a read receipt or acceptance; unknown notices are not resent.",
     }
@@ -955,7 +951,7 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
     resolved = {
         k
         for k in _notice_state.held_keys(mem["notices"])
-        if k.startswith(("mail:", "needs:", "peer:")) and k not in protected
+        if k.startswith(RESOLVABLE) and k not in protected
     }
     mem["notices"] = _notice_state.resolve_keys(mem["notices"], resolved)
     if not dry:
@@ -974,6 +970,10 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
             mem["sent"].pop(f"peer:{h}:False", None)
         if f"peer:{h}:False" in active:
             mem["sent"].pop(f"peer:{h}:True", None)
+    if mem["notice_legacy_hold"]:
+        mem["sent"].update({k: now for k, _ in alerts if k not in mem["sent"]})
+        mem["notice_legacy_hold"] = False
+        mem["notice_issue"] = "Legacy notice outcome unknown; active alerts acknowledged without resend."
     new = [(k, t) for k, t in alerts if k not in mem["sent"]]
     board["notifications"] = notice_summary(mem)
     if dry:

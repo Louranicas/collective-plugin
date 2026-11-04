@@ -322,7 +322,10 @@ def hygiene_scan(files: list[Path]) -> list[Finding]:
     """Find secrets and infrastructure addresses in files that would be published."""
     findings: list[Finding] = []
     for f in files:
-        if f.suffix not in TEXT_SUFFIXES or f.stat().st_size > MAX_SCAN_BYTES:
+        if f.suffix not in TEXT_SUFFIXES:
+            continue
+        if f.stat().st_size > MAX_SCAN_BYTES:
+            findings.append(Finding("H-unscanned-oversize", str(f.relative_to(ROOT)), 0, "exceeds scan limit"))
             continue
         text = f.read_text(encoding="utf-8", errors="replace")
         for n, line in enumerate(text.splitlines(), 1):
@@ -420,6 +423,7 @@ def history_scan(blobs: list[tuple[str, bytes]]) -> list[Finding]:
     findings: list[Finding] = []
     for label, data in blobs:
         if len(data) > MAX_SCAN_BYTES:
+            findings.append(Finding("HH-unscanned-oversize", label, 0, "exceeds scan limit"))
             continue
         for n, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
             for rule, rx in HYGIENE.items():

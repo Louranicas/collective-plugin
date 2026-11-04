@@ -330,6 +330,13 @@ class JobBehavior(unittest.TestCase):
         ):
             self.assertEqual(jobs.main(), 1)
         self.assertNotIn(PRIVATE_TEXT, error.getvalue())
+        jobs.state_dir().chmod(0o755)
+        with (
+            mock.patch.object(sys, "argv", ["coordination_jobs.py", "--job", "cohesion"]),
+            contextlib.redirect_stderr(io.StringIO()) as error,
+        ):
+            self.assertEqual(jobs.main(), 1)
+        self.assertEqual(json.loads(error.getvalue())["status"], "failed")
 
 
 class CoordinationInstaller(unittest.TestCase):
