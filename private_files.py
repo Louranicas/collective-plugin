@@ -131,7 +131,10 @@ def _finite_float(value: str) -> float:
 
 
 def parse_json(data: str | bytes | bytearray) -> object:
-    """Parse JSON and normalize encoding, syntax and parser-recursion failures to ValueError.
+    """Parse strict JSON and normalize encoding, syntax and parser-recursion failures to ValueError.
+
+    A duplicate object key at any depth and a non-finite number (NaN, Infinity or a
+    float that overflows) also raise ValueError, so ambiguous data never parses.
 
     Callers bound file or transport bytes. Nesting supported by the interpreter is
     accepted; this helper imposes no additional depth cap. Interpreter recursion
