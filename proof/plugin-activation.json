@@ -1,0 +1,43 @@
+{
+  "observed_at": "2026-11-04T11:44:33.160696+00:00",
+  "plugin_id": "local.collective",
+  "manifest_sha256": "ebb8ae9f005bcc5b1a3fa02613db8eab406443ea585841943139b255fb40dc23",
+  "activation": "explicit user-authorized D2; local configuration backed up before changes",
+  "scope": "Read-only capabilities and dashboard actions succeeded in both runtimes. Dashboard sources returned roster/history/memory/local SSH metadata. No startup/event hooks.",
+  "tuios": {
+    "log_id": "plugin-log-1",
+    "action_id": "capabilities",
+    "status": "succeeded",
+    "exit_code": 0,
+    "dashboard": {
+      "log_id": "plugin-log-2",
+      "action_id": "status",
+      "status": "succeeded",
+      "exit_code": 0,
+      "sources": {
+        "roster": "available",
+        "history": "available",
+        "memory": "available",
+        "ssh": "available"
+      }
+    }
+  },
+  "native_herdr": {
+    "log_id": "plugin-log-1",
+    "action_id": "capabilities",
+    "status": "succeeded",
+    "exit_code": 0,
+    "dashboard": {
+      "log_id": "plugin-log-2",
+      "action_id": "status",
+      "status": "succeeded",
+      "exit_code": 0,
+      "sources": {
+        "roster": "available",
+        "history": "available",
+        "memory": "available",
+        "ssh": "available"
+      }
+    }
+  }
+}

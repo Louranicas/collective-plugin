@@ -1,0 +1,24 @@
+id = "local.collective"
+name = "Collective"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Passive collective status and explicitly reviewed local mail plans"
+platforms = ["linux"]
+
+[[actions]]
+id = "status"
+title = "Collective status (read only)"
+contexts = ["workspace"]
+command = ["python3", "-I", "collective.py", "dashboard"]
+
+[[actions]]
+id = "capabilities"
+title = "Collective capabilities and boundaries"
+contexts = ["workspace"]
+command = ["python3", "-I", "collective.py", "capabilities"]
+
+[[panes]]
+id = "dashboard"
+title = "Collective status"
+placement = "overlay"
+command = ["python3", "-I", "collective.py", "dashboard", "--watch"]

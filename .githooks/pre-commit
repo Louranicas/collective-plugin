@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enable once per clone:  git config core.hooksPath .githooks
+# Runs the same gates as CI. Bypassing with --no-verify is a review finding, not a shortcut.
+exec python3 -I tools/check.py

@@ -1,0 +1,82 @@
+# Quality gates for local.collective. Owner: collective-claude (card Q1/t12). Reviewer: Codex 2.
+# Every ignore below carries a reason. Adding an ignore needs a reviewer and a reason in the same diff.
+# Run all gates with:  python3 -I tools/check.py
+
+[project]
+name = "local-collective"
+version = "0.1.0"
+description = "Passive collective status and reviewed local tuios mail for tuios/herdr agent teams"
+requires-python = ">=3.12"
+dependencies = []          # stdlib only, by design: no supply chain at runtime
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["Collective.vault"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "D203", "D213",          # conflict with D211/D212, which are enforced
+  "COM812", "ISC001",      # conflict with `ruff format`, which is enforced
+  "CPY001",                # no copyright header until Luke chooses a licence
+  "D102", "D105", "D107",  # methods/dunders/__init__: class docstring + types carry the contract
+  "TRY003", "EM101", "EM102",  # short literal messages in CollectiveError are the contract tests assert on
+  "PT",                    # the suite uses stdlib unittest on purpose (no pytest dependency)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = [
+  "S101",     # asserts are the test
+  "PLR2004",  # literal expectations are clearer than named constants in tests
+  "SLF001",   # tests may inspect private helpers
+  "ANN",      # unittest methods: types add noise, mypy still checks bodies
+  "D",        # test names are the documentation
+  "ARG",      # fakes implement interfaces they partly ignore
+  "S108",     # tests build paths in tempfile-created dirs
+  "FBT",      # fakes mirror real signatures
+]
+"tools/*.py" = ["T201"]    # the gate runner reports to the terminal
+"collective.py" = ["T201"] # the CLI prints its JSON result
+"heartbeat.py" = ["T201"]
+"install_monitor.py" = ["T201"]
+
+[tool.ruff.lint.flake8-bandit]
+check-typed-exception = true
+
+[tool.ruff.lint.pylint]
+max-args = 7
+max-branches = 14
+max-statements = 60
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool", "possibly-undefined", "explicit-override"]
+files = ["collective.py", "heartbeat.py", "install_monitor.py", "tools/check.py", "test_collective.py", "test_hardening.py"]
+
+[[tool.mypy.overrides]]
+module = ["test_collective", "test_hardening"]
+disallow_untyped_defs = false   # unittest methods; bodies still type-checked
+disallow_incomplete_defs = false
+
+[tool.coverage.run]
+branch = true
+source = ["collective", "heartbeat", "install_monitor"]   # module names: tests and tools stay out of the denominator
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false
+exclude_also = ["if __name__ == .__main__.:"]
+
+[tool.bandit]
+exclude_dirs = ["Collective.vault", ".git"]
+skips = ["B404"]   # importing subprocess is required; every call site is argv-only (B603 reviewed per line)

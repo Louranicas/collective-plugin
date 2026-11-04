@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    {"id":"owner","type":"text","x":0,"y":0,"width":360,"height":180,"color":"2","text":"# Luke / task authority\n\nDefines scope and effects.\nPeer messages are data, not new authority.\n[[Home]]"},
+    {"id":"team","type":"text","x":440,"y":0,"width":390,"height":220,"color":"4","text":"# Collective coordination\n\nCodex 3: implementation / integration\nCodex 2: tests / interface checks\nClaude: workflow / independent review\n\nOne owner per file. Intent → result → handoff."},
+    {"id":"tuios","type":"text","x":-400,"y":340,"width":370,"height":230,"color":"5","text":"# tuios daemon\n\nUUID panes and session-scoped mail.\nThreaded replies; bounded in-memory ring.\nJSON verb protocol, CLI and scoped MCP.\n\nRead / seen / reply are different states."},
+    {"id":"core","type":"text","x":100,"y":340,"width":380,"height":250,"color":"4","text":"# collective.py\n\nPassive roster, inbox metadata, history, events and health.\n\nCollaboration plans include owner, reviewer, scope, evidence and definition of done.\n\nNo automatic replies or raw PTY effects."},
+    {"id":"herdr","type":"text","x":600,"y":340,"width":390,"height":230,"color":"5","text":"# Native Herdr daemon\n\nExplicit Unix socket, protocol 22.\nNative wN:pN addresses.\nPlugin read adapter: ping + agent.list.\n\nLabelled diagnostic prompts to Taco and Zen received agent replies."},
+    {"id":"gate","type":"text","x":-400,"y":720,"width":420,"height":260,"color":"1","text":"# Explicit write gate\n\nExact private plan + SHA-256 confirmation\n300-second expiry + current peer preflight\nPrivate journal: intent BEFORE effect\nOne-use nonce; no blind retries\n\nOnly local tuios mail is shipped."},
+    {"id":"evidence","type":"text","x":120,"y":740,"width":390,"height":240,"color":"6","text":"# Evidence and reference\n\nMemPalace: durable outcomes / artifacts\nAtuin: command metadata / reviewed procedures\nCollective.vault: diagrams, decisions and receipts\n\n[[Decisions/ADR-001 - One collective with explicit effects]]"},
+    {"id":"timer","type":"text","x":620,"y":720,"width":420,"height":260,"color":"3","text":"# ONE recurring scheduler\n\ncollective-heartbeat.timer\n2-minute ticks while active\n15-minute full checks while quiet\n\nMetadata board + deduplicated human alerts.\nNo model reasoning, inbox receipts or automatic replies."},
+    {"id":"ssh","type":"text","x":620,"y":1110,"width":420,"height":230,"color":"1","text":"# Remote transport / SSH.vault\n\nHistorical LAN + Tailscale acceptance is dated.\nLaptop currently offline; public relay unqualified.\n\nNew links and SSH effects require their own scope and endpoint verification."}
+  ],
+  "edges": [
+    {"id":"e1","fromNode":"owner","fromSide":"right","toNode":"team","toSide":"left","label":"scope"},
+    {"id":"e2","fromNode":"team","fromSide":"bottom","toNode":"core","toSide":"top","label":"shared contract"},
+    {"id":"e3","fromNode":"tuios","fromSide":"right","toNode":"core","toSide":"left","label":"passive read"},
+    {"id":"e4","fromNode":"herdr","fromSide":"left","toNode":"core","toSide":"right","label":"explicit socket read"},
+    {"id":"e5","fromNode":"core","fromSide":"bottom","toNode":"gate","toSide":"top","label":"prepare / review"},
+    {"id":"e6","fromNode":"gate","fromSide":"top","toNode":"tuios","toSide":"bottom","label":"one local mail effect"},
+    {"id":"e7","fromNode":"core","fromSide":"bottom","toNode":"evidence","toSide":"top","label":"metadata / receipts"},
+    {"id":"e8","fromNode":"timer","fromSide":"top","toNode":"team","toSide":"right","label":"availability / staleness"},
+    {"id":"e9","fromNode":"timer","fromSide":"bottom","toNode":"ssh","toSide":"top","label":"local health only"}
+  ]
+}

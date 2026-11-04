@@ -1,0 +1,27 @@
+{
+  "token": "COLLECTIVE-RETURN-20261104",
+  "native_peer_route": "w1:p5",
+  "native_peer_harness_claim": "pi",
+  "inspected_pre_prompt_state": "done",
+  "attempts": 1,
+  "root_observed_mail": {
+    "id": 288,
+    "thread_id": 288,
+    "kind": "message",
+    "sent_at": "<redacted-ns-timestamp>",
+    "session": "session-0",
+    "subject": "COLLECTIVE-RETURN-20261104",
+    "text": "Native Herdr Pi w1:p5 return transport test COLLECTIVE-RETURN-20261104",
+    "to": "<codex3-pane>"
+  },
+  "native_terminal_readback": [
+    "message 288 queued for \u283c Handshake with all agents | <user> (<codex3-pane>)",
+    "COLLECTIVE-RETURN-20261104 \u2014 One return-leg attempt succeeded. tuios reported: message 288 queued for \u283c Handshake with all agents | <user> (<codex3-pane>). Queued, not independently verified as read."
+  ],
+  "durable_event": "<mempalace-event-id>",
+  "limits": [
+    "Root directly read the matching tuios inbox token before eviction. Later reviewers could inspect native terminal readback, not the evicted inbox entry.",
+    "The mail had no from field. This is routing evidence, not authenticated identity.",
+    "One bounded diagnostic; no grant changes, installs, daemon hooks, or unattended bridge were created."
+  ]
+}

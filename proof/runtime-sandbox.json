@@ -1,0 +1,22 @@
+{
+  "proof": {
+    "no_new_privileges": true,
+    "inet_socket_refused": true,
+    "home_write_refused": true,
+    "designated_state_writable": true
+  },
+  "template_sha256": "96df491cf65a39772168b0b8ca106ab7836aee2ad32004a4dbd946fb6b0fd77a",
+  "scope": "Temporary unit using the installed service sandbox template; scheduler board separately verified3tuios22herdr.",
+  "observed_at": "2026-11-04T11:43:17.043757+00:00",
+  "installed_unit_sha256": "96df491cf65a39772168b0b8ca106ab7836aee2ad32004a4dbd946fb6b0fd77a",
+  "service": [
+    "Result=success",
+    "ExecMainStatus=0"
+  ],
+  "timer": "active",
+  "limits": [
+    "IPAddressDeny user-level IP firewall unavailable; not counted as enforced.",
+    "Probe verified named refusals using an identical template; not arbitrary syscall or exploit resistance.",
+    "Passive scheduler does not execute model turns or guarantee mail delivery."
+  ]
+}

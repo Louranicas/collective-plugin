@@ -1,0 +1,86 @@
+[
+  {
+    "source": "Architecture/Communication layers.md",
+    "source_sha256": "494e82898b2a15288e830ceb49dd9e130a849034cea696fa572d1435ca3fce75",
+    "diagram": 1,
+    "svg": "Assets/communication-layers-1.svg",
+    "sha256": "ec40b3e0d658847d8619da3913a9194c3418161eec39ee8613b4ab05489b5b4f"
+  },
+  {
+    "source": "Architecture/Communication layers.md",
+    "source_sha256": "494e82898b2a15288e830ceb49dd9e130a849034cea696fa572d1435ca3fce75",
+    "diagram": 2,
+    "svg": "Assets/communication-layers-2.svg",
+    "sha256": "4644af2e204e8d8c4ee01447f7d6b9e9a0298f90c40f1fe9da015db68fb3c88e"
+  },
+  {
+    "source": "Architecture/Runtime and recovery.md",
+    "source_sha256": "fb8c195864190c33e5e5ee6b9376489e894e88517c2e2c2eebb12d082c6b083e",
+    "diagram": 1,
+    "svg": "Assets/runtime-and-recovery-1.svg",
+    "sha256": "39ae5c99a16210d9ba3e522794009fc1bbde4c42970e67b461988eaf7156dcb2"
+  },
+  {
+    "source": "Architecture/Runtime and recovery.md",
+    "source_sha256": "fb8c195864190c33e5e5ee6b9376489e894e88517c2e2c2eebb12d082c6b083e",
+    "diagram": 2,
+    "svg": "Assets/runtime-and-recovery-2.svg",
+    "sha256": "ca0db77198c242e7dc3cfb3f446235f3fe77663f09a2a9a8a324b793e3737ff9"
+  },
+  {
+    "source": "Architecture/Write lifecycle.md",
+    "source_sha256": "ceace18db7ac809bc209ab66dcf4af5acac8610f317e50ca888c1c04efed81df",
+    "diagram": 1,
+    "svg": "Assets/write-lifecycle-1.svg",
+    "sha256": "78a77ea808db37d5d27311407ea48b0c201b1f69babb5e762d9a3dcfa19bac5f"
+  },
+  {
+    "source": "Architecture/Write lifecycle.md",
+    "source_sha256": "ceace18db7ac809bc209ab66dcf4af5acac8610f317e50ca888c1c04efed81df",
+    "diagram": 2,
+    "svg": "Assets/write-lifecycle-2.svg",
+    "sha256": "ac4a4631b8e46012f9c993a62b960308abd76c298d7018f209a99b47eacba44c"
+  },
+  {
+    "source": "Operations/Reference workflow.md",
+    "source_sha256": "fd03b522ac69444432c557977de251a86252099e69e549dcd97fdf7b932bb965",
+    "diagram": 1,
+    "svg": "Assets/reference-workflow-1.svg",
+    "sha256": "514386f4427ca89c7abc1c0aa033b8686946da09615830d55afd03631c7fe087"
+  },
+  {
+    "source": "Operations/Reference workflow.md",
+    "source_sha256": "fd03b522ac69444432c557977de251a86252099e69e549dcd97fdf7b932bb965",
+    "diagram": 2,
+    "svg": "Assets/reference-workflow-2.svg",
+    "sha256": "7176a1250bf35e2375da49a5e216965a6754b8b412dcd5f8eba6f4ada0e2998e"
+  },
+  {
+    "source": "Operations/Reference workflow.md",
+    "source_sha256": "fd03b522ac69444432c557977de251a86252099e69e549dcd97fdf7b932bb965",
+    "diagram": 3,
+    "svg": "Assets/reference-workflow-3.svg",
+    "sha256": "6aefb8647686bff0e4c797d5720b9b7c5cddd6531af84473f05237b4af3adc41"
+  },
+  {
+    "source": "Operations/SSH State.md",
+    "source_sha256": "bea906d2754cda6b7fad3fe0af8a0852b78e79560b61027d1269125cd6299224",
+    "diagram": 1,
+    "svg": "Assets/ssh-state-1.svg",
+    "sha256": "009ae039e3a4defc4946ea5d1c42f31c463358c9c14fe6dd235da00c4eb3235a"
+  },
+  {
+    "source": "Operations/Scheduler Runbook.md",
+    "source_sha256": "588f6127d86f7d3f096ad59a880c0c3576e2f867be838b30a5810977400c840a",
+    "diagram": 1,
+    "svg": "Assets/scheduler-runbook-1.svg",
+    "sha256": "5a457ece9a0aa710f55e03556de3c0254831890939c825aa626c33d6b015aea8"
+  },
+  {
+    "source": "Operations/Scheduler Runbook.md",
+    "source_sha256": "588f6127d86f7d3f096ad59a880c0c3576e2f867be838b30a5810977400c840a",
+    "diagram": 2,
+    "svg": "Assets/scheduler-runbook-2.svg",
+    "sha256": "26b89ee903fdc2df47d8889c3b00f9d8e1763c089faefcb9c41b880641f30329"
+  }
+]

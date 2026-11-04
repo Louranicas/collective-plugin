@@ -1,0 +1,33 @@
+# Gates for local.collective. Owner: collective-claude (Q1). Same command as pre-commit: tools/check.py
+name: gates
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read            # least privilege: no write tokens, no secrets used
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install pinned gate tools
+        run: python -m pip install --disable-pip-version-check ruff==0.17.3 mypy==2.4.1 bandit==1.9.4 coverage==7.17.1
+      - name: Run every gate
+        run: python -I tools/check.py --keep-going --receipt gates-receipt.json
+      - name: Show receipt
+        if: always()
+        run: cat gates-receipt.json || true
