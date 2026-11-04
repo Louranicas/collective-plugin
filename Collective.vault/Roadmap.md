@@ -40,3 +40,8 @@ Return to [[Home]] · [[Decisions/ADR-001 - One collective with explicit effects
 5. Use tuios best-of-N worktrees for a substantial design choice after a committed, clean base and an agreed acceptance test exist. Preserve candidate evidence before cleanup.
 
 These are planned possibilities, not background tasks or permission to act. Update this note when a current receipt changes their status.
+
+
+## Live publication and runtime checks
+
+Earlier build-stage rows are dated snapshots. Query the current accepted heads and pipeline status in the [GitHub repository](https://github.com/Louranicas/collective-plugin) and [GitLab mirror](https://gitlab.com/lukeomahoney/collective-plugin); use `git ls-remote <remote> refs/heads/main` and the hosts' CI views. Current source-bound local measurements and dated host acceptance are in [[Evidence/Verification]]. The code and reviewed mail path are implemented; publication uses protected main branches. The SSH relay stop still needs local owner authentication.

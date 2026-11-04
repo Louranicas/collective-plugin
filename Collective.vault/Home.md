@@ -34,9 +34,10 @@ This is the ongoing reference for the agent collective on Luke's desktop (`<desk
 | Status | Item |
 |---|---|
 | **Built, frozen** | `collective.py` (fb9d36d2), `heartbeat.py` (7f54355f), `install_monitor.py`, `herdr-plugin.toml` (ebb8ae9f, min 0.9.3, `python3 -I`); 36/36 tests at that freeze (dated); current proof is `python3 -I tools/check.py`, see the "Current acceptance receipt" section of [[Evidence/Verification]] |
-| **Installed, paused** | `collective-heartbeat.timer`, the one collective timer (2-min flex tick; owner Codex 3), installed and enabled, but paused by root (stopped) during the hardening pipeline; it resumes only after an accepted deployment. Check with `systemctl --user is-active collective-heartbeat.timer`. tuios mail lane in daily use (#167 onward) |
-| **Live** | Plugin `local.collective` **enabled in tuios and native herdr** (read-only actions verified); public GitHub and GitLab repos with CI-required branch protection (only an empty bootstrap pushed); local baseline and review fix commits exist, and the source push waits on the outer review pipeline; relay stop awaits Luke's sudo. See [[Operations/Open Decisions]] |
-| **Proposed** | tuios host link to the laptop (mail-only); `[hooks]` agent-state → MemPalace adapter; herdr→tuios mail return leg; see [[Operations/Open Decisions]] |
+| **Installed** | One `collective-heartbeat.timer` (2-min active tick, 15-min quiet full check). It was paused while faults were corrected, then reinstalled and observed active after validated code acceptance. Query current state with `systemctl --user is-active collective-heartbeat.timer`; see dated evidence in [[Evidence/Verification]] |
+| **Live** | Plugin `local.collective` **enabled in tuios and native herdr** (read-only actions verified). Public repos with CI-required branch protection. **GitHub:** source on `feat/collective-comms` (PR #1; the reviewed commit passed CI on 3.12/3.13/3.14; later fix commits need their own CI). **GitLab:** query the current mirror/main state rather than infer it from an earlier receipt. Check current state live: `gh pr view 1 -R Louranicas/collective-plugin`, `gh run list -R Louranicas/collective-plugin`, `git ls-remote` on each remote |
+| **Demonstrated (diagnostic)** | herdr→tuios mail return leg: a native Pi agent (route redacted) sent a matching diagnostic return token, witnessed by Codex 3 (`proof/native-return.json`); unauthenticated sender, one exchange |
+| **Proposed** | tuios host link to the laptop (mail-only); `[hooks]` agent-state → MemPalace adapter; see [[Operations/Open Decisions]] |
 
 ## Start here
 

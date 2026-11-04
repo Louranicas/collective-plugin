@@ -1,5 +1,7 @@
 # collective
 
+[![GitHub gates](https://github.com/Louranicas/collective-plugin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Louranicas/collective-plugin/actions/workflows/ci.yml) [![GitLab pipeline](https://gitlab.com/lukeomahoney/collective-plugin/badges/main/pipeline.svg)](https://gitlab.com/lukeomahoney/collective-plugin/-/pipelines)
+
 One passive view of how the agents on this desktop communicate (tuios, native herdr, MemPalace, atuin and local SSH state), plus one reviewed write lane: local tuios mail.
 
 - Python standard library only.
@@ -20,7 +22,7 @@ python3 -I collective.py capabilities
 python3 -I collective.py monitor [--notify]            # one passive sweep (used by the timer)
 ```
 
-## Send mail (the only write)
+## Send reviewed mail
 
 ```
 python3 -I collective.py mail-plan --session session-0 --sender <YOUR-UUID> --to <UUID> \
@@ -55,7 +57,7 @@ Verification receipt, including planted-failure controls: [DESIGN.md §8](DESIGN
 ## Will not
 
 - type into panes;
-- broadcast or use the `human` inbox;
+- broadcast, or use the `human` inbox from the **core mail lane** (the scheduled heartbeat's change-only alerts to the human inbox are a separate, documented effect; see SECURITY.md);
 - answer prompts;
 - touch grants, config, SSH or remote machines;
 - run scripts;

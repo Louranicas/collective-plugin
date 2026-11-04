@@ -198,3 +198,20 @@ This was the accepted local snapshot before the delivery follow-up; it is retain
 | Branch coverage (`coverage==7.17.1`, `branch = true`) | **94%** aggregate: `collective.py` 93%, `heartbeat.py` 94%, `install_monitor.py` 95%. Every production module is above the 90% floor |
 
 **Limitations:** this is a local run. The source is not yet pushed to either public repo (only an empty bootstrap is), and the heartbeat timer is paused during hardening. The tool environment was redirected to temporary uv cache and tool directories, because the sandbox mounts the user's uv directories read-only; the pinned tool versions were unchanged. The planted-red mutation count was not re-run for this receipt beyond what the gates themselves execute. Remote CI results are recorded by the pipeline, not here. History is not scrubbed: identifiers from before the redaction remain in `be90af1`.
+
+### Correction 2026-11-05 (dated; earlier rows are history)
+
+- GitLab `main` protection now reads push **No one**, merge Maintainers, force-push off. This supersedes "push limited to Maintainers" above.
+- For current counts and hashes, cite the latest receipt rather than any figure in this note: `python3 -I tools/check.py --keep-going --receipt R.json`, the CI run for the head SHA, and Codex 2's review artifacts.
+- Scope of the 2026-11-05 local receipt's sentence "the source is not yet pushed to either public repo": it applies **only to the follow-up fix hashes**. The earlier reviewed source (`ed065371`) was already public on GitHub (`feat/collective-comms`, PR #1) and passed CI; GitLab held only the bootstrap.
+
+### Host acceptance of code revision `42bf838` (2026-11-05 Australia/ACT)
+
+This is a dated code/runtime receipt, independent of later documentation edits. GitHub CI run [41839937370](https://github.com/Louranicas/collective-plugin/actions/runs/41839937370) passed the 3.12, 3.13 and 3.14 jobs for this revision. Both independent reviewers accepted fresh anonymous clones and replayed the original delivery regressions.
+
+- Real tuios mail: a private reviewed plan was submitted once, a matching single threaded peer token was read back, and consumed-plan replay returned exit 2. The private journal contains one intent and one submitted outcome. Routing evidence only; sender claims are not authentication.
+- Actual hardened user service: install returned `installed`, service `Result=success`, `ExecMainStatus=0`, and the one timer was active. The local watched-peer configuration is private, outside the repository.
+- Actual systemd deadline probe: a controlled dependency sleeping 120 seconds was run through the heartbeat CLI in a separate state directory with the same sandbox template. The service finished successfully in **66.21 seconds**, wrote its durable board and explicitly reported UNKNOWN; the notification attempt recorded failure rather than success. The temporary unit and hanging executable were removed.
+- The named kernel refusal probe and static 0.6 exposure score in `proof/runtime-sandbox.json` apply to the unchanged sandbox template; this does not claim arbitrary exploit resistance or user-level IP firewall enforcement.
+
+The private raw routing and runtime receipts remain local. The main merges, GitLab pipeline and final documentation revision require their own recorded checks; no future success is assumed here.
