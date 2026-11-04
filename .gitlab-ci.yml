@@ -16,6 +16,11 @@ gates:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     GIT_DEPTH: "0"            # the history gate scans all of HEAD and refuses a shallow clone
   before_script:
+    - apt-get update && apt-get install --yes --no-install-recommends git
+    # The Docker executor can check out with umask 0000. Keep the owned-file
+    # refusal intact; establish a non-writable checkout and private new files.
+    - umask 077
+    - chmod -R go-w -- "$CI_PROJECT_DIR"
     - python -m pip install ruff==0.17.3 mypy==2.4.1 bandit==1.9.4 coverage==7.17.1
   script:
     - python -I tools/check.py --keep-going --receipt gates-receipt.json
