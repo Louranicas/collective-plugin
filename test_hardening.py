@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import fcntl
+import hashlib
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
 import selectors
 import shutil
 import socket
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -23,8 +28,186 @@ from unittest import mock
 
 import collective as core
 import heartbeat
+import install_coordination_jobs as coordination_installer
 import install_monitor as installer
 from test_collective import RECIPIENT, SENDER, MonitorBackend, snapshot
+
+
+class PrivateFileCliRegressions(unittest.TestCase):
+    TOOL = """import json, os, sys
+from pathlib import Path
+with Path(os.environ['TEST_TOOL_LOG']).open('a') as log:
+    log.write(json.dumps([Path(sys.argv[0]).name, *sys.argv[1:]]) + '\\n')
+name = Path(sys.argv[0]).name
+if name == 'mempalace' and os.environ.get('TEST_FAIL_MEMORY'):
+    raise SystemExit(1)
+if name == 'atuin':
+    print('fixture-time | fixture-host | exit=0 | fixture-directory')
+elif name == 'tailscale':
+    print(json.dumps({'Peer': {}}))
+elif name == 'mempalace':
+    print(json.dumps({'events': []}))
+elif name == 'tuios':
+    args = sys.argv[1:]
+    if 'list-attention' in args:
+        value = {'boot_id': 'fixture-boot'}
+    elif 'list-agents' in args:
+        value = {'agents': []}
+    elif 'read-agent-messages' in args:
+        value = {'messages': [], 'evicted': 0}
+    else:
+        value = {}
+    print(json.dumps(value))
+"""
+
+    def fixture(self, root: Path, flow: str, *, fifo: bool) -> tuple[list[str], dict[str, str], Path]:
+        home, state, binary = root / "home", root / "state", root / "bin"
+        for directory in (home, state, binary):
+            directory.mkdir(mode=0o700)
+        for name in ("tuios", "atuin", "mempalace", "tailscale", "systemctl", "systemd-analyze"):
+            tool = binary / name
+            tool.write_text(f"#!{sys.executable}\n{self.TOOL}", encoding="utf-8")
+            tool.chmod(0o700)
+        environment = {
+            "HOME": str(home),
+            "PATH": str(binary),
+            "XDG_STATE_HOME": str(state),
+            "TUIOS_BIN": str(binary / "tuios"),
+            "HERDR_NATIVE_SOCKET": str(root / "absent.sock"),
+            "COLLECTIVE_NATIVE_HERDR_SOCKET": str(root / "absent.sock"),
+            "COLLECTIVE_SESSION": "work",
+            "TEST_TOOL_LOG": str(root / "tool-log.jsonl"),
+        }
+        source = Path(core.__file__).parent
+        if flow == "mail":
+            path = root / "plan.json"
+            command = [
+                str(source / "collective.py"),
+                "--json",
+                "mail-apply",
+                "--plan",
+                str(path),
+                "--confirm",
+                "0" * 64,
+                "--journal",
+                str(root / "mail-journal.jsonl"),
+            ]
+        elif flow == "monitor":
+            directory = root / "monitor"
+            directory.mkdir(mode=0o700)
+            path = directory / "monitor-state.json"
+            command = [str(source / "collective.py"), "--json", "monitor", "--state-dir", str(directory)]
+        elif flow == "heartbeat":
+            directory = state / "collective"
+            directory.mkdir(mode=0o700)
+            path = directory / "memory.json"
+            command = [str(source / "heartbeat.py"), "--dry-run"]
+        elif flow == "installer":
+            directory = home / ".config/systemd/user"
+            directory.mkdir(mode=0o700, parents=True)
+            path = directory / installer.SERVICE
+            command = [str(source / "install_monitor.py"), "--install"]
+        elif flow == "write":
+            path = root / "private-output.json"
+            program = (
+                "import json,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); import collective; "
+                "collective.write_private_json(sys.argv[2], {'fixture':42}); "
+                "print(json.dumps(json.loads(Path(sys.argv[2]).read_text())))"
+            )
+            command = ["-c", program, str(source), str(path)]
+        else:
+            path = root / "unused.json"
+            environment["TEST_FAIL_MEMORY"] = "1"
+            command = [str(source / "collective.py"), "--json", "memory", "--since-event-id", "fixture-invalid"]
+        if fifo:
+            os.mkfifo(path, 0o600)
+        else:
+            value = installer.units()[installer.SERVICE] if flow == "installer" else "{}"
+            path.write_text(value, encoding="utf-8")
+            path.chmod(0o600)
+        return [sys.executable, "-I", *command], environment, path
+
+    def run_flow(self, flow: str, *, fifo: bool) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            command, environment, path = self.fixture(root, flow, fifo=fifo)
+            try:
+                result = subprocess.run(  # noqa: S603 - fixed interpreter, owned fixture paths, isolated fake-tool PATH
+                    command,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=1,
+                )
+            except subprocess.TimeoutExpired:
+                self.fail(f"{flow} blocked instead of refusing a private FIFO within one second")
+            if fifo:
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertTrue(stat.S_ISFIFO(path.stat().st_mode))
+                self.assertFalse((root / "tool-log.jsonl").exists(), result.stderr)
+                self.assertFalse((root / "mail-journal.jsonl").exists())
+                self.assertFalse((root / "monitor/latest.json").exists())
+                self.assertFalse((root / "state/collective/heartbeat.json").exists())
+                self.assertFalse((root / "home/.config/systemd/user" / installer.TIMER).exists())
+                self.assertFalse((root / "home/.local/state/collective-plugin/scheduler-install-receipt.json").exists())
+                self.assertFalse((root / "home/.local/state/collective-plugin/scheduler-backups").exists())
+            else:
+                expected = 2 if flow in {"mail", "read-error"} else 0
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if flow == "mail":
+                    self.assertIn("Malformed plan", json.loads(result.stderr)["error"])
+                if flow == "write":
+                    self.assertEqual(json.loads(path.read_text()), {"fixture": 42})
+                if flow == "monitor":
+                    latest = root / "monitor/latest.json"
+                    board = json.loads(latest.read_text())
+                    self.assertTrue(board["roster"]["available"])
+                    self.assertIsInstance(board["observed_at"], str)
+                    self.assertEqual(stat.S_IMODE(latest.stat().st_mode), 0o600)
+                if flow == "heartbeat":
+                    board, _ = json.JSONDecoder().raw_decode(result.stdout.lstrip())
+                    self.assertEqual(board["agents"], [])
+                    self.assertEqual(board["flex"]["tick_s"], 120)
+                    self.assertEqual(path.read_text(), "{}")
+                    self.assertFalse((path.parent / "heartbeat.json").exists())
+                if flow == "installer":
+                    self.assertEqual(json.loads(result.stdout)["status"], "installed")
+                    receipt = root / "home/.local/state/collective-plugin/scheduler-install-receipt.json"
+                    self.assertEqual(json.loads(receipt.read_text())["status"], "installed")
+                    self.assertTrue((path.parent / installer.TIMER).is_file())
+                if flow == "read-error":
+                    calls = [json.loads(line) for line in (root / "tool-log.jsonl").read_text().splitlines()]
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(calls[0][:3], ["mempalace", "logstream", "list"])
+                    self.assertEqual(calls[0][-2:], ["--since-event-id", "fixture-invalid"])
+            return result
+
+    def test_mail_apply_fifo_refused_and_regular_plan_parsed(self):
+        self.run_flow("mail", fifo=False)
+        self.run_flow("mail", fifo=True)
+
+    def test_monitor_fifo_refused_and_regular_state_works(self):
+        self.run_flow("monitor", fifo=False)
+        self.run_flow("monitor", fifo=True)
+
+    def test_heartbeat_fifo_refused_and_regular_state_works(self):
+        self.run_flow("heartbeat", fifo=False)
+        self.run_flow("heartbeat", fifo=True)
+
+    def test_installer_fifo_refused_before_commands_and_regular_units_work(self):
+        self.run_flow("installer", fifo=False)
+        self.run_flow("installer", fifo=True)
+
+    def test_nonexclusive_private_write_fifo_refused_and_regular_write_works(self):
+        self.run_flow("write", fifo=False)
+        self.run_flow("write", fifo=True)
+
+    def test_failed_memory_read_has_neutral_error_wording(self):
+        result = self.run_flow("read-error", fifo=False)
+        error = json.loads(result.stderr)["error"]
+        self.assertIn("mempalace", error)
+        self.assertNotIn("outcome unknown", error.lower())
 
 
 class CoreTransportTests(unittest.TestCase):
@@ -454,6 +637,92 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual([call.args[0][2] for call in commands.call_args_list], ["daemon-reload"])
 
 
+class InstallerTransactionRegressions(unittest.TestCase):
+    @staticmethod
+    def filesystem(home: Path) -> dict[str, tuple[int, bytes | str | None]]:
+        entries: dict[str, tuple[int, bytes | str | None]] = {}
+        for path in home.rglob("*"):
+            mode = path.lstat().st_mode
+            value = str(path.readlink()) if path.is_symlink() else path.read_bytes() if path.is_file() else None
+            entries[str(path.relative_to(home))] = (mode, value)
+        return entries
+
+    def exercise(self, module: Any) -> None:
+        monitor = module.monitor if module is coordination_installer else module
+        with tempfile.TemporaryDirectory(prefix="collective-installer-lock-") as tmp:
+            home = Path(tmp)
+            destination = home / ".config/systemd/user"
+            destination.mkdir(parents=True)
+            proposals = module.units()
+            marker = (
+                coordination_installer.MARKER if module is coordination_installer else "# Managed by local.collective;"
+            )
+            original = (marker + " original\n").encode()
+            for name in proposals:
+                (destination / name).write_bytes(original)
+            states = (
+                {
+                    "collective-collaboration.timer": {"enabled": True, "active": False},
+                    "collective-cohesion.timer": {"enabled": False, "active": True},
+                    "collective-quality.timer": {"enabled": True, "active": True},
+                }
+                if module is coordination_installer
+                else {installer.TIMER: {"enabled": True, "active": False}}
+            )
+            initial = {name: dict(value) for name, value in states.items()}
+            if module is installer:
+                wants = destination / "timers.target.wants"
+                wants.mkdir()
+                (wants / installer.TIMER).symlink_to(destination / installer.TIMER)
+            calls: list[list[str]] = []
+            nested = False
+
+            def command(argv: list[str], *, check: bool = True) -> int:
+                nonlocal nested
+                calls.append(argv)
+                if argv[0] != "systemctl":
+                    return 0
+                verb, name = argv[2], argv[-1]
+                if verb in {"is-enabled", "is-active"}:
+                    return 0 if states[name][verb[3:]] else 3
+                if verb == "enable" and "--now" in argv and not nested:
+                    nested = True
+                    before, count = self.filesystem(home), len(calls)
+                    with self.assertRaises(monitor.CollectiveError):
+                        module.install()
+                    self.assertEqual(self.filesystem(home), before)
+                    self.assertEqual(len(calls), count)
+                    raise monitor.CollectiveError("outer activation failure after nested refusal")
+                changes = {
+                    "enable": {"enabled": True},
+                    "disable": {"enabled": False},
+                    "start": {"active": True},
+                    "stop": {"active": False},
+                }
+                if name in states:
+                    states[name].update(changes.get(verb, {}))
+                    if verb == "enable" and "--now" in argv:
+                        states[name]["active"] = True
+                return 0
+
+            with (
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch.object(monitor, "command", side_effect=command),
+            ):
+                with self.assertRaisesRegex(monitor.CollectiveError, "outer activation failure"):
+                    module.install()
+                self.assertTrue(nested)
+                self.assertEqual(states, initial)
+                self.assertTrue(all((destination / name).read_bytes() == original for name in proposals))
+                self.assertEqual(module.install()["status"], "installed")
+
+    def test_heartbeat_installer_refuses_concurrent_entry_until_rollback_completes(self):
+        self.exercise(installer)
+
+    def test_coordination_installer_refuses_concurrent_entry_until_rollback_completes(self):
+        self.exercise(coordination_installer)
+
+
 class CoverageGateTests(unittest.TestCase):
     @unittest.skipUnless(
         importlib.util.find_spec("coverage"), "coverage is a test development dependency; tools/check.py provides it"
@@ -552,7 +821,8 @@ class HeartbeatTests(unittest.TestCase):
         self.assertTrue(any("native herdr socket" in a for a in board["alerts"]))
         self.assertIsNone(board["herdr"])
         self.assertEqual(memory["notice_rc"], 99)
-        self.assertEqual(memory["notice_failures"], 1)
+        self.assertEqual(memory["notice_failures"], 0)
+        self.assertEqual(memory["notices"][-1]["status"], "unknown")
         self.assertEqual(memory["sent"], {})
 
     def test_watched_peer_list_strips_whitespace_and_empty_entries(self) -> None:
@@ -640,7 +910,7 @@ class AdversarialBoundaries(unittest.TestCase):
                 10000,
                 alerts,
             )
-            with mock.patch.object(heartbeat, "run", return_value=(0, "")) as run:
+            with mock.patch.object(heartbeat, "run", return_value=(0, '{"message_id":42}')) as run:
                 heartbeat.finish({}, mem, alerts, 10000, dry=False)
             body = run.call_args.args[0][-1]
             self.assertLessEqual(len(body.encode()), 8192)
@@ -693,7 +963,7 @@ class HeartbeatLifecycle(unittest.TestCase):
             mock.patch.object(heartbeat, "peers", return_value={"fixture-peer": True})
         )
         self.stack.enter_context(mock.patch.object(heartbeat, "activity", return_value=(True, ["fixture-active"])))
-        self.send = mock.Mock(return_value=(0, ""))
+        self.send = mock.Mock(return_value=(0, '{"message_id":42}'))
         self.ring: dict[str, Any] = {"boot_id": "fixture-boot", "evicted": 0}
         self.ring_rc = 0
 
@@ -740,10 +1010,12 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.assertEqual(heartbeat.main(), 0)
         self.assertEqual(self.send.call_count, 1)
 
-    def test_transition_raised_during_backoff_is_delivered_later(self) -> None:
+    def test_legacy_uncertain_notice_holds_new_transitions_after_upgrade(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
         memory: dict[str, Any] = heartbeat.load("memory.json", {})
         memory["notice_failures"], memory["notice_attempt"] = 1, self.clock.return_value
+        memory.pop("notices", None)
+        memory.pop("notice_legacy_hold", None)
         heartbeat.save("memory.json", memory)
         self.peers.return_value = {"fixture-peer": False}
         self.clock.return_value += 120
@@ -751,9 +1023,12 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.send.assert_not_called()
         self.clock.return_value += 3600
         self.assertEqual(heartbeat.main(), 0)
-        self.assertIn("offline", self.send.call_args.args[0][-1])
+        self.send.assert_not_called()
+        memory = heartbeat.load("memory.json", {})
+        self.assertTrue(memory["notice_legacy_hold"])
+        self.assertIn("peer:fixture-peer:False", memory["pending"])
         self.assertEqual(heartbeat.main(), 0)
-        self.assertEqual(self.send.call_count, 1)
+        self.send.assert_not_called()
 
     def test_transition_survives_crash_after_pre_send_save(self) -> None:
         self.assertEqual(heartbeat.main(), 0)
@@ -767,12 +1042,13 @@ class HeartbeatLifecycle(unittest.TestCase):
         self.send.side_effect = None
         self.clock.return_value += 3600
         self.assertEqual(heartbeat.main(), 0)
-        self.assertEqual(self.send.call_count, 2)
+        self.assertEqual(self.send.call_count, 1)
         self.assertIn("offline", self.send.call_args.args[0][-1])
         memory = heartbeat.load("memory.json", {})
-        self.assertEqual(memory["pending"], {})
+        self.assertIn("peer:fixture-peer:False", memory["pending"])
+        self.assertEqual(memory["notices"][-1]["status"], "unknown")
         self.assertEqual(heartbeat.main(), 0)
-        self.assertEqual(self.send.call_count, 2)
+        self.assertEqual(self.send.call_count, 1)
 
     def test_failed_reads_keep_ages_and_suppress_repeat_notices(self) -> None:
         self.agents.return_value = [{"window_id": "pane", "unread": 2, "harness_id": "fixture"}]
@@ -840,7 +1116,7 @@ class HeartbeatLifecycle(unittest.TestCase):
 
         def evicting_send(argv: Any) -> Any:
             self.ring["evicted"] += 1
-            return 0, ""
+            return 0, '{"message_id":42}'
 
         self.send.side_effect = evicting_send
         for _ in range(3):
@@ -980,6 +1256,9 @@ class RefusalAndRecovery(unittest.TestCase):
             backend = core.Backend(native_socket="relative" if case == "relative" else "/fixture/socket")
             with (
                 self.subTest(case=case),
+                mock.patch.object(
+                    os, "lstat", return_value=mock.Mock(st_mode=stat.S_IFSOCK | 0o600, st_uid=os.getuid())
+                ),
                 mock.patch.object(socket, "socket", return_value=sock),
                 mock.patch.object(
                     time, "monotonic", side_effect=[1, 999] if case == "deadline" else None, return_value=1
@@ -988,7 +1267,11 @@ class RefusalAndRecovery(unittest.TestCase):
             ):
                 backend.native_request("ping", {})
             if case == "wrong-uid":
+                sock.getsockopt.assert_called_once()
                 sock.sendall.assert_not_called()
+            if case in {"eof", "size"}:
+                sock.connect.assert_called_once()
+                sock.recv.assert_called()
 
     def test_native_roster_success_projects_fields_without_content(self) -> None:
         backend = core.Backend(native_socket="/fixture/socket")
@@ -1079,19 +1362,20 @@ class RefusalAndRecovery(unittest.TestCase):
 
 
 class SchedulerRecoveryPaths(unittest.TestCase):
-    def test_notification_failure_backoff_and_pending_batch(self) -> None:
+    def test_documented_notification_refusal_backoff_and_pending_batch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(heartbeat, "STATE", Path(tmp)):
             memory = heartbeat.memory_state({})
             pending = [(f"mail:{n}", "fixture") for n in range(20)]
-            with mock.patch.object(heartbeat, "run", return_value=(99, "private error body")) as run:
+            refusal = '{"error":{"code":"rate_limited","message":"private error body"}}'
+            with mock.patch.object(heartbeat, "run", return_value=(1, refusal)) as run:
                 heartbeat.finish({}, memory, pending, 10000, dry=False)
                 self.assertEqual(memory["notice_failures"], 1)
-                self.assertEqual(memory["notice_rc"], 99)
+                self.assertEqual(memory["notice_rc"], 1)
                 heartbeat.finish({}, memory, pending, 10120, dry=False)
                 self.assertEqual(run.call_count, 1)
                 persisted: dict[str, Any] = heartbeat.load("memory.json", {})
                 self.assertNotIn("private error body", json.dumps(persisted))
-            with mock.patch.object(heartbeat, "run", return_value=(0, "")) as run:
+            with mock.patch.object(heartbeat, "run", return_value=(0, '{"message_id":42}')) as run:
                 heartbeat.finish({}, memory, pending, 11000, dry=False)
                 self.assertEqual(len(memory["sent"]), 16)
                 heartbeat.finish({}, memory, pending, 11001, dry=False)
@@ -1431,7 +1715,7 @@ class AdversarialDeliveryRegressions(unittest.TestCase):
                 memory["needs_since"]["hblocked:" + pane] = 1
             alerts: list[tuple[str, str]] = []
             heartbeat.native_alerts(rows, memory, 10000, alerts)
-            with mock.patch.object(heartbeat, "run", return_value=(0, "")) as transport:
+            with mock.patch.object(heartbeat, "run", return_value=(0, '{"message_id":42}')) as transport:
                 heartbeat.finish({}, memory, alerts, 10000, dry=False)
                 first = transport.call_args.args[0][-1]
                 self.assertEqual(set(memory["sent"]), {key for key, text in alerts if text in first})
@@ -1483,3 +1767,520 @@ class AdversarialDeliveryRegressions(unittest.TestCase):
                         self.assertIsInstance(raised.exception, core.TransportUncertain)
                     else:
                         self.assertNotIsInstance(raised.exception, core.TransportUncertain)
+
+
+class HeartbeatNoticeOutcomeRegressions(unittest.TestCase):
+    @override
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="collective-notice-")
+        self.addCleanup(temporary.cleanup)
+        self.state = Path(temporary.name)
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.object(heartbeat, "STATE", self.state))
+        self.stack.enter_context(mock.patch.object(heartbeat, "TUIOS", "/fixture/tuios"))
+        self.stack.enter_context(mock.patch.object(heartbeat, "SESSION", "work"))
+        self.stack.enter_context(mock.patch.object(heartbeat, "WATCH_PEERS", ("fixture",)))
+        self.response = (0, json.dumps({"success": True, "message_id": 42}))
+        self.sent_calls: list[list[str]] = []
+        self.observed: list[dict[str, Any]] = []
+        self.boot = "fixture-boot"
+        self.read_rc = 0
+        self.evicted = 0
+        self.stack.enter_context(mock.patch.object(heartbeat, "run", side_effect=self.transport))
+
+    def transport(self, argv: list[str], *args: Any, **kwargs: Any) -> tuple[int, str]:
+        if "send-agent-message" in argv:
+            self.assertEqual(argv[argv.index("-w") + 1], "human")
+            self.sent_calls.append(list(argv))
+            return self.response
+        if "list-attention" in argv:
+            return self.read_rc, json.dumps({"boot_id": self.boot})
+        if "read-agent-messages" in argv or "list-agent-messages" in argv:
+            self.assertNotIn("-w", argv)
+            return self.read_rc, json.dumps({"messages": self.observed, "evicted": self.evicted})
+        raise AssertionError(f"Unexpected notice fixture command: {argv}")
+
+    def memory(self) -> heartbeat.MemoryState:
+        return heartbeat.memory_state({"ring_boot": self.boot})
+
+    def reload(self) -> heartbeat.MemoryState:
+        return heartbeat.memory_state(heartbeat.load("memory.json", {}))
+
+    def test_unknown_send_results_hold_after_reload_and_backoff(self):
+        responses = [
+            (99, ""),
+            (1, "unconfirmed failure"),
+            (0, ""),
+            (0, "not-json"),
+            (0, "{}"),
+            (0, '{"message_id":true}'),
+            (0, '{"message_id":0}'),
+            (0, '{"message_id":"42"}'),
+            (0, '{"success":false,"message_id":42}'),
+            (1, '{"message_id":42}'),
+            (0, '{"error":{"code":"internal_error"},"message_id":42}'),
+        ]
+        alerts = [("peer:fixture:False", "Fixture peer offline")]
+        for response in responses:
+            with self.subTest(response=response):
+                self.response, self.sent_calls = response, []
+                memory = self.memory()
+                heartbeat.finish({}, memory, alerts, 10000, dry=False)
+                self.assertEqual(len(self.sent_calls), 1)
+                recovered = self.reload()
+                self.assertNotIn(alerts[0][0], recovered["sent"])
+                heartbeat.finish({}, recovered, alerts, 20000, dry=False)
+                self.assertEqual(len(self.sent_calls), 1)
+                self.assertEqual(recovered["notices"][-1]["status"], "unknown")
+                self.assertEqual(recovered["notices"][-1]["held_keys"], [alerts[0][0]])
+
+    def test_confirmed_receipt_binds_body_selected_keys_and_fixed_route(self):
+        alerts = [("peer:fixture:False", "Fixture peer offline")]
+        memory = self.memory()
+        heartbeat.finish({}, memory, alerts, 10000, dry=False)
+        recovered = self.reload()
+        record = recovered["notices"][-1]
+        self.assertEqual(record["status"], "submitted")
+        self.assertEqual(record["message_id"], 42)
+        self.assertEqual(record["keys"], [alerts[0][0]])
+        self.assertEqual(record["held_keys"], [])
+        body = self.sent_calls[0][-1]
+        self.assertIn("--json", self.sent_calls[0])
+        self.assertIn(record["request_id"], body)
+        self.assertEqual(record["digest"], hashlib.sha256(body.encode()).hexdigest())
+        heartbeat.finish({}, recovered, alerts, 20000, dry=False)
+        self.assertEqual(len(self.sent_calls), 1)
+
+    def test_documented_refusal_uses_bounded_backoff_before_retry(self):
+        self.response = (1, '{"error":{"code":"rate_limited"}}')
+        alerts = [("peer:fixture:False", "Fixture peer offline")]
+        memory = self.memory()
+        heartbeat.finish({}, memory, alerts, 10000, dry=False)
+        recovered = self.reload()
+        self.assertEqual(recovered["notices"][-1]["status"], "refused")
+        self.assertEqual(recovered["notices"][-1]["held_keys"], [])
+        heartbeat.finish({}, recovered, alerts, 10001, dry=False)
+        self.assertEqual(len(self.sent_calls), 1)
+        self.response = (0, '{"message_id":43}')
+        heartbeat.finish({}, recovered, alerts, 20000, dry=False)
+        self.assertEqual(len(self.sent_calls), 2)
+        self.assertEqual(recovered["notices"][-1]["status"], "submitted")
+        self.assertEqual(recovered["notices"][-1]["message_id"], 43)
+
+    def test_new_alert_is_not_starved_or_mixed_into_an_unknown_batch(self):
+        first = ("peer:fixture:False", "First unknown alert")
+        second = ("ring-loss:fixture-boot", "Second independent alert")
+        self.response = (99, "")
+        memory = self.memory()
+        heartbeat.finish({}, memory, [first], 10000, dry=False)
+        self.response = (0, '{"message_id":43}')
+        heartbeat.finish({}, memory, [first, second], 10001, dry=False)
+        self.assertEqual(len(self.sent_calls), 2)
+        self.assertNotIn(first[1], self.sent_calls[1][-1])
+        self.assertIn(second[1], self.sent_calls[1][-1])
+        self.assertEqual([r["status"] for r in memory["notices"]], ["unknown", "submitted"])
+        self.assertEqual(memory["notices"][0]["held_keys"], [first[0]])
+        self.assertEqual(memory["notices"][1]["keys"], [second[0]])
+
+    def test_verified_generation_reset_preserves_unknown_audit_and_native_holds(self):
+        self.response = (99, "")
+        memory = self.memory()
+        memory["unread_since"], memory["needs_since"] = {"fixture": 1}, {"hblocked:native": 1}
+        alerts = [("mail:fixture", "Fixture unread"), ("needs:hblocked:native", "Native blocked")]
+        heartbeat.finish({}, memory, alerts, 10000, dry=False)
+        heartbeat.forget_tuios_tracking(memory)
+        self.assertEqual(memory["notices"][-1]["status"], "unknown")
+        self.assertEqual(memory["notices"][-1]["keys"], [key for key, _ in alerts])
+        self.assertEqual(memory["notices"][-1]["held_keys"], ["needs:hblocked:native"])
+        self.assertEqual(memory["unread_since"], {})
+        self.assertEqual(memory["needs_since"], {"hblocked:native": 1})
+
+    def crash_boundary(self, *, after_effect: bool) -> None:
+        marker = self.state / "fake-effect"
+        marker.unlink(missing_ok=True)
+
+        def crash_before_effect(argv: list[str], *args: Any, **kwargs: Any) -> tuple[int, str]:
+            if "send-agent-message" in argv:
+                if after_effect:
+                    with marker.open("a") as stream:
+                        stream.write("effect\n")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                os._exit(37)
+            return self.transport(argv, *args, **kwargs)
+
+        alerts = [("peer:fixture:False", "Fixture peer offline")]
+
+        def child() -> None:
+            with mock.patch.object(heartbeat, "run", side_effect=crash_before_effect):
+                heartbeat.finish({}, self.memory(), alerts, 10000, dry=False)
+
+        process = multiprocessing.get_context("fork").Process(target=child)
+        process.start()
+        try:
+            process.join(2)
+            self.assertFalse(process.is_alive(), "Notice crash fixture did not reach its boundary")
+            self.assertEqual(process.exitcode, 37)
+        finally:
+            if process.is_alive():
+                process.kill()
+            process.join()
+        stored: dict[str, Any] = heartbeat.load("memory.json", {})
+        recovered = self.reload()
+        heartbeat.finish({}, recovered, alerts, 20000, dry=False)
+        self.assertEqual(self.sent_calls, [])
+        self.assertEqual(stored["notices"][-1]["status"], "intent")
+        self.assertEqual(recovered["notices"][-1]["status"], "unknown")
+        effects = marker.read_text().splitlines() if marker.exists() else []
+        self.assertEqual(len(effects), int(after_effect))
+
+    def test_real_process_exit_after_intent_recovers_unknown_without_resend(self):
+        for after_effect in (False, True):
+            with self.subTest(after_effect=after_effect):
+                self.crash_boundary(after_effect=after_effect)
+
+    def test_exact_passive_receipt_reconciles_without_new_submission(self):
+        self.response = (99, "")
+        alerts = [("peer:fixture:False", "Fixture peer offline")]
+        memory = self.memory()
+        heartbeat.finish({}, memory, alerts, 10000, dry=False)
+        self.observed = [{"id": 99, "to": "human", "session": "work", "text": self.sent_calls[0][-1]}]
+        recovered = self.reload()
+        heartbeat.finish({}, recovered, alerts, 20000, dry=False)
+        self.assertEqual(len(self.sent_calls), 1)
+        self.assertEqual(recovered["notices"][-1]["status"], "submitted")
+        self.assertEqual(recovered["notices"][-1]["message_id"], 99)
+        self.assertEqual(recovered["notices"][-1]["held_keys"], [])
+        self.assertIn(alerts[0][0], recovered["sent"])
+
+    def test_unrelated_or_incomplete_passive_evidence_cannot_release_unknown(self):
+        alerts = [("peer:fixture:False", "Fixture peer offline")]
+        cases = (
+            "wrong-body",
+            "wrong-route",
+            "wrong-session",
+            "missing-session",
+            "bool-id",
+            "wrong-boot",
+            "wrong-endpoint",
+            "read-failed",
+            "evicted-missing",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                self.sent_calls, self.observed = [], []
+                self.boot, self.read_rc, self.evicted = "fixture-boot", 0, 0
+                self.response = (99, "")
+                memory = self.memory()
+                heartbeat.finish({}, memory, alerts, 10000, dry=False)
+                recovered = self.reload()
+                message: dict[str, Any] = {"id": 99, "to": "human", "session": "work", "text": self.sent_calls[0][-1]}
+                if case == "wrong-body":
+                    message["text"] += "changed"
+                if case == "wrong-route":
+                    message["to"] = RECIPIENT
+                if case == "wrong-session":
+                    message["session"] = "other"
+                if case == "missing-session":
+                    message.pop("session")
+                if case == "bool-id":
+                    message["id"] = True
+                if case == "wrong-boot":
+                    self.boot = "new-boot"
+                if case == "wrong-endpoint":
+                    recovered["notices"][-1]["endpoint"] = "different-endpoint"
+                if case == "read-failed":
+                    self.read_rc = 1
+                self.observed = [message]
+                if case == "evicted-missing":
+                    self.evicted, self.observed = 1000000, []
+                heartbeat.finish({}, recovered, alerts, 20000, dry=False)
+                self.assertEqual(len(self.sent_calls), 1)
+                self.assertEqual(recovered["notices"][-1]["status"], "unknown")
+                self.assertEqual(recovered["notices"][-1]["held_keys"], [alerts[0][0]])
+
+
+class CoordinationReceiptObservation(unittest.TestCase):
+    @override
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="collective-job-observation-")
+        self.addCleanup(temporary.cleanup)
+        self.state = Path(temporary.name)
+        self.directory = self.state / "coordination"
+        self.directory.mkdir(mode=0o700)
+        patcher = mock.patch.object(heartbeat, "STATE", self.state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.now = 10000.0
+
+    def write(self, name: str, value: object) -> None:
+        path = self.directory / f"{name}.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        path.chmod(0o600)
+
+    def stamp(self, value: float) -> str:
+        return dt.datetime.fromtimestamp(value, dt.UTC).isoformat()
+
+    def fresh(self) -> None:
+        self.write("installer", {"status": "installed", "generated_utc": self.stamp(self.now - 400)})
+        for job in ("collaboration", "cohesion", "quality"):
+            self.write(job, {"schema": 1, "job": job, "status": "ok", "generated_utc": self.stamp(self.now - 10)})
+
+    def test_absent_installer_is_not_installed_and_first_run_grace_is_explicit(self):
+        with mock.patch.object(heartbeat, "run") as command:
+            observed, alerts = heartbeat.coordination_status(self.now)
+            self.assertEqual(observed["status"], "not-installed")
+            self.assertEqual(alerts, [])
+            self.write("installer", {"status": "installed", "generated_utc": self.stamp(self.now - 10)})
+            observed, alerts = heartbeat.coordination_status(self.now)
+            self.assertEqual(alerts, [])
+            jobs = observed["jobs"]
+            assert isinstance(jobs, dict)
+            self.assertEqual({row["status"] for row in jobs.values()}, {"awaiting-first-run"})
+            command.assert_not_called()
+
+    def test_fresh_good_receipts_are_observed_without_executing_jobs(self):
+        self.fresh()
+        with mock.patch.object(heartbeat, "run") as command:
+            observed, alerts = heartbeat.coordination_status(self.now)
+            self.assertEqual(observed["status"], "observed")
+            self.assertEqual(alerts, [])
+            jobs = observed["jobs"]
+            assert isinstance(jobs, dict)
+            self.assertEqual(set(jobs), {"collaboration", "cohesion", "quality"})
+            self.assertTrue(all(row["status"] == "ok" and not row["stale"] for row in jobs.values()))
+            self.assertIn("do not prove", str(observed["meaning"]))
+            command.assert_not_called()
+
+    def test_bad_missing_failed_or_stale_receipts_are_attention_after_grace(self):
+        cases = ("missing", "malformed", "failed", "degraded", "future", "wrong-job", "bool-schema", "stale")
+        for case in cases:
+            with self.subTest(case=case):
+                self.fresh()
+                path = self.directory / "collaboration.json"
+                value: dict[str, Any] = {
+                    "schema": 1,
+                    "job": "collaboration",
+                    "status": "ok",
+                    "generated_utc": self.stamp(self.now - 10),
+                }
+                if case == "missing":
+                    path.unlink()
+                elif case == "malformed":
+                    path.write_text("not-json", encoding="utf-8")
+                else:
+                    if case in {"failed", "degraded"}:
+                        value["status"] = case
+                    if case == "future":
+                        value["generated_utc"] = self.stamp(self.now + 3600)
+                    if case == "wrong-job":
+                        value["job"] = "quality"
+                    if case == "bool-schema":
+                        value["schema"] = True
+                    if case == "stale":
+                        value["generated_utc"] = self.stamp(self.now - 1801)
+                    self.write("collaboration", value)
+                with mock.patch.object(heartbeat, "run") as command:
+                    observed, alerts = heartbeat.coordination_status(self.now)
+                    self.assertEqual(observed["status"], "attention")
+                    self.assertEqual([key for key, _ in alerts], ["jobs:collaboration"])
+                    command.assert_not_called()
+
+    def test_daily_quality_missing_receipt_waits_for_first_due_time_then_becomes_unknown(self):
+        self.now = 1800000000.0
+        self.fresh()
+        (self.directory / "quality.json").unlink()
+        first_deadline = 25 * 3600 + 660 + 30
+        for install_age, expected in (
+            (600, "awaiting-first-run"),
+            (first_deadline - 1, "awaiting-first-run"),
+            (first_deadline + 1, "unknown"),
+        ):
+            with self.subTest(install_age=install_age):
+                self.write("installer", {"status": "installed", "generated_utc": self.stamp(self.now - install_age)})
+                with mock.patch.object(heartbeat, "run") as command:
+                    observed, alerts = heartbeat.coordination_status(self.now)
+                    jobs = observed["jobs"]
+                    assert isinstance(jobs, dict)
+                    self.assertEqual(jobs["quality"]["status"], expected)
+                    self.assertEqual([key for key, _ in alerts], ["jobs:quality"] if expected == "unknown" else [])
+                    command.assert_not_called()
+
+    def test_malformed_first_quality_receipt_is_not_hidden_by_initial_grace(self):
+        self.fresh()
+        self.write("installer", {"status": "installed", "generated_utc": self.stamp(self.now - 10)})
+        (self.directory / "quality.json").write_text("not-json", encoding="utf-8")
+        with mock.patch.object(heartbeat, "run") as command:
+            observed, alerts = heartbeat.coordination_status(self.now)
+            jobs = observed["jobs"]
+            assert isinstance(jobs, dict)
+            self.assertEqual(jobs["quality"]["status"], "unknown")
+            self.assertEqual([key for key, _ in alerts], ["jobs:quality"])
+            command.assert_not_called()
+
+
+class NativeFramingRealSocketRegressions(unittest.TestCase):
+    """Real same-UID AF_UNIX tests; cap includes LF; no cross-user claim.
+
+    Trailing-data cases queue the complete reply before the first client recv,
+    including when recv is deliberately segmented. Future traffic is not tested.
+    """
+
+    @staticmethod
+    def read_request(conn: socket.socket) -> dict[str, Any]:
+        request = bytearray()
+        while b"\n" not in request:
+            part = conn.recv(1024)
+            if not part:
+                raise AssertionError("request EOF")
+            request.extend(part)
+        value: dict[str, Any] = json.loads(request)
+        return value
+
+    def frame_payload(self, request: dict[str, Any]) -> bytes:
+        reply: dict[str, Any] = {"id": request["id"], "result": {"agents": []}}
+        if self.frame_case == "wrong-id":
+            reply["id"] = "unrelated"
+        if self.frame_case == "error":
+            reply["error"] = {"code": "refused"}
+        if self.frame_case == "shape":
+            reply["result"] = []
+        payload = json.dumps(reply, separators=(",", ":")).encode()
+        if self.frame_case in {"exact", "over"}:
+            payload += b" " * (self.frame_cap + (self.frame_case == "over") - len(payload) - 1)
+        if self.frame_case != "eof":
+            payload += b"\n"
+        if self.frame_case == "trailing":
+            payload += b'{"id":"extra","result":{}}\n'
+        return payload
+
+    def send_payload(self, conn: socket.socket, payload: bytes) -> None:
+        if self.frame_case == "trickle":
+            for byte in payload:
+                if self.frame_stop.wait(0.035):
+                    break
+                conn.sendall(bytes([byte]))
+        else:
+            conn.sendall(payload)
+            self.frame_ready.set()
+        conn.shutdown(socket.SHUT_WR)
+
+    def serve_frame(self, listener: socket.socket) -> None:
+        try:
+            conn, _ = listener.accept()
+            with conn:
+                conn.settimeout(1)
+                request = self.read_request(conn)
+                self.frame_requests.append(request)
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    self.send_payload(conn, self.frame_payload(request))
+        except Exception as exc:  # noqa: BLE001 - retain fixture-thread failures for the parent assertion
+            self.frame_errors.append(exc)
+        finally:
+            self.frame_ready.set()
+
+    def exchange(self, adapter: str, case: str, chunk: int | None = None) -> tuple[object, float]:
+        real_socket = socket.socket
+        ready, stop = threading.Event(), threading.Event()
+        errors: list[BaseException] = []
+        requests: list[dict[str, Any]] = []
+        cap = 256
+        self.frame_case, self.frame_cap = case, cap
+        self.frame_ready, self.frame_stop = ready, stop
+        self.frame_errors, self.frame_requests = errors, requests
+        budget = 0.15 if case == "trickle" else 1.0
+
+        class SegmentedClient(socket.socket):
+            @override
+            def sendall(self, data: Any, *args: Any, **kwargs: Any) -> None:
+                super().sendall(data, *args, **kwargs)
+                if b'"method"' in data and case != "trickle" and not ready.wait(1):
+                    raise TimeoutError("fixture did not queue response")
+
+            @override
+            def recv(self, size: int, *args: Any, **kwargs: Any) -> bytes:
+                return super().recv(min(size, chunk) if chunk else size, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "native.sock"
+            with real_socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(path))
+                path.chmod(0o600)
+                listener.listen(1)
+                listener.settimeout(1)
+
+                thread = threading.Thread(target=self.serve_frame, args=(listener,), daemon=True)
+                thread.start()
+                started = time.monotonic()
+                try:
+                    with (
+                        mock.patch.object(socket, "socket", SegmentedClient),
+                        mock.patch.object(core, "MAX_TOOL_OUTPUT", cap),
+                        mock.patch.object(heartbeat, "MAX_BYTES", cap),
+                        mock.patch.object(heartbeat, "HERDR_SOCK", str(path)),
+                        mock.patch.object(heartbeat, "NATIVE_CALL_S", budget),
+                        mock.patch.object(heartbeat.SWEEP, "end", float("inf")),
+                    ):
+                        result: object
+                        if adapter == "core":
+                            try:
+                                result = core.Backend(native_socket=str(path), timeout=budget).native_request(
+                                    "agent.list", {}
+                                )
+                            except core.CollectiveError:
+                                result = None
+                        else:
+                            result = heartbeat.herdr_agents()
+                    elapsed = time.monotonic() - started
+                finally:
+                    stop.set()
+                    thread.join(2)
+                self.assertFalse(thread.is_alive(), "fixture thread did not stop")
+                self.assertEqual(errors, [], str(errors))
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(requests[0]["method"], "agent.list")
+                self.assertEqual(requests[0]["params"], {})
+                return result, elapsed
+
+    def test_correlated_frame_segmented_positive(self):
+        for adapter in ("core", "heartbeat"):
+            for chunk in (None, 7):
+                with self.subTest(adapter=adapter, chunk=chunk):
+                    self.assertEqual(
+                        self.exchange(adapter, "normal", chunk)[0], {"agents": []} if adapter == "core" else []
+                    )
+
+    def test_eof_valid_json_without_lf_refused(self):
+        for adapter in ("core", "heartbeat"):
+            with self.subTest(adapter=adapter):
+                self.assertIsNone(self.exchange(adapter, "eof")[0])
+
+    def test_queued_second_frame_refused_even_segmented(self):
+        for adapter in ("core", "heartbeat"):
+            for chunk in (None, 17):
+                with self.subTest(adapter=adapter, chunk=chunk):
+                    self.assertIsNone(self.exchange(adapter, "trailing", chunk)[0])
+
+    def test_wrong_id_error_and_shape_refused(self):
+        for adapter in ("core", "heartbeat"):
+            for case in ("wrong-id", "error", "shape"):
+                with self.subTest(adapter=adapter, case=case):
+                    self.assertIsNone(self.exchange(adapter, case)[0])
+
+    def test_exact_cap_including_lf_passes_plus_one_refused(self):
+        for adapter in ("core", "heartbeat"):
+            for chunk in (None, 17):
+                with self.subTest(adapter=adapter, chunk=chunk):
+                    self.assertEqual(
+                        self.exchange(adapter, "exact", chunk)[0], {"agents": []} if adapter == "core" else []
+                    )
+                    self.assertIsNone(self.exchange(adapter, "over", chunk)[0])
+
+    def test_trickle_absolute_deadline(self):
+        for adapter in ("core", "heartbeat"):
+            with self.subTest(adapter=adapter):
+                result, elapsed = self.exchange(adapter, "trickle")
+                self.assertIsNone(result)
+                self.assertGreater(elapsed, 0.10)
+                self.assertLess(elapsed, 0.8)

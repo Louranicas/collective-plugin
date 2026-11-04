@@ -215,3 +215,28 @@ This is a dated code/runtime receipt, independent of later documentation edits. 
 - The named kernel refusal probe and static 0.6 exposure score in `proof/runtime-sandbox.json` apply to the unchanged sandbox template; this does not claim arbitrary exploit resistance or user-level IP firewall enforcement.
 
 The private raw routing and runtime receipts remain local. The main merges, GitLab pipeline and final documentation revision require their own recorded checks; no future success is assumed here.
+
+### Release and closure verification: 2026-11-05 (Claude, independent)
+
+| Check | Result |
+|---|---|
+| GitHub `main` | `f21a331`, a squash of PR #1. Its tree `fce44178` equals the reviewed `a697ab8`. The CI push run passed on 3.12/3.13/3.14 |
+| GitLab `main` | `f21a331`. MR !1 merged; the `main` pipeline passed on 3.12/3.13/3.14 |
+| Fresh clone of `main` | 9/9 gates PASS; 107 tests OK (one legitimate skip) |
+| `main` history | No pane UUIDs in any blob of `a5c2733..f21a331` |
+| Branches | Luke deleted `feat/collective-comms` (GitHub) and `release/collective-comms` (GitLab); both remotes are `main`-only |
+| Relay | Disabled and inactive after Luke's sudo; recovery sshd active (also verified by Codex 2, #442) |
+| Durable records | MemPalace `evt_20261104T175055_6e5da8819039` (Claude outcome) plus Codex 3's release-acceptance events and SSH.vault record (#447) |
+
+**Lesson:** the tuios `draft_held` false positive on an empty placeholder held both Codex panes' mail-wake queued for about 7 hours. A read-only screen check confirmed the input boxes were empty, and an `ask-agent` nudge (at Luke's request) woke both panes.
+
+## Research and gate provenance (2026-11-05, zero-touch hive phase)
+
+Pointers only; no research corpus is copied into the vault. Library sources were treated as data.
+
+| Item | Durable record | Status |
+|---|---|---|
+| Claude X1 (library principles) and X1b (peer-reviewed findings) | MemPalace artifact `art_20261104T200737_fc181e3a418c`; `~/.local/state/collective-claude/research-20261105/` (with SHA-256 manifest) | Delivered. R57 MAST is peer-reviewed (NeurIPS 2025 Datasets and Benchmarks); R47 is a preprint, so its numbers are hypotheses |
+| Codex 2 research (library, zellij, papers) | `art_20261104T200618_3f7a2b2d3e2f`, `…_b0e79a38aa9c`, `…_71ee5b5f43e6`; `~/.local/state/collective-codex2/reliability-20261105/` | Delivered. 20 forked crash schedules passed, with at most 1 fake effect. No empirical claim that coherence improved |
+| R3 gates patch v6 | MemPalace artifact `art_20261104T200737_c1689c7e94ed`; patch sha256 `317e6e84…`, `tools/check.py` `8ec18b09…` | **Accepted** by Codex 2 (#598, #601). Waiting on Codex 3 to apply it after R1 and the jobs work |
+| Rhythms reporter v2 | Same state directory: `rhythms.py` and `fixtures_check.py` (12 checks) | **Not adopted.** Codex 3's jobs share its principles: descriptive only, no hard-coded roster (#601). They make no phase, balance or latency claims. The scheduler design is Codex 3's decision (#582, #621) |

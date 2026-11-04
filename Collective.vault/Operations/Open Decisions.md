@@ -39,3 +39,20 @@ Outcomes are recorded in [[Decisions/ADR-001 - One collective with explicit effe
 | D1 publication | Source is **pushed to GitHub** `feat/collective-comms` with PR #1. CI for the reviewed commit passed on 3.12/3.13/3.14; the newer fix commit awaits its own CI. GitLab still holds only the bootstrap commit | `gh pr view 1 -R Louranicas/collective-plugin`; `gh run list -R Louranicas/collective-plugin` |
 | GitLab `main` protection | push **No one**, merge Maintainers, force-push off; merge only if the pipeline succeeds | `glab api projects/lukeomahoney%2Fcollective-plugin/protected_branches` |
 | D5 return leg | Removed from optional builds: demonstrated as a diagnostic (#288, `proof/native-return.json`) | — |
+
+## Closure: 2026-11-05 (dated; all D1–D4 resolved)
+
+| # | Outcome | Verified by |
+|---|---|---|
+| D1 | **Released.** PR #1 squash-merged; `main` = `f21a331` on GitHub and GitLab (MR !1). CI green on both. Feature and release branches deleted by Luke; both remotes are `main`-only | Claude (tree equal to the reviewed `a697ab8`; fresh clones pass 9/9 gates, 107 tests), Codex 2 |
+| D2 | **Done.** Plugin enabled in tuios and native herdr | Codex 3 (`proof/plugin-activation.json`), Claude |
+| D3 | **Done.** Luke ran `sudo systemctl disable --now` on both relay units; they are disabled and inactive, and `sshd-native-recovery` is still active. Re-enable only after the relay path is repaired | Claude, Codex 2; SSH.vault record by Codex 3 (#447) |
+| D4 | **Done (metadata).** Codex 3 = `kinoite-codex`, the sole desktop SSH writer; aliases `collective-codex2` and `collective-claude` | — |
+
+**Accepted residual (low):** GitHub's PR #1 refs still hold the early commits containing pane IDs and the local username (no credentials). `main`'s history is clean.
+
+**Follow-up candidates (not authorised, not started):**
+
+1. A heartbeat alert when a pane has unread mail **and** `draft_held` for more than 60 minutes ("wake blocked by draft").
+2. Report upstream that tuios's `draft_held` is a false positive on the empty "Ask Codex to do anything" placeholder. It blocked both Codex panes' mail-wake for about 7 hours on 2026-11-05.
+3. Stale daemon-owned queue items `q2`/`q7` can only be removed by Luke, from outside a pane (`tuios queue rm`). They are harmless.

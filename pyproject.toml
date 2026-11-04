@@ -43,6 +43,8 @@ ignore = [
 "collective.py" = ["T201"] # the CLI prints its JSON result
 "heartbeat.py" = ["T201"]
 "install_monitor.py" = ["T201"]
+"coordination_jobs.py" = ["T201"]
+"install_coordination_jobs.py" = ["T201"]
 
 [tool.ruff.lint.flake8-bandit]
 check-typed-exception = true
@@ -60,7 +62,10 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool", "possibly-undefined", "explicit-override"]
-files = ["collective.py", "heartbeat.py", "install_monitor.py", "tools/check.py", "test_collective.py", "test_hardening.py"]
+files = [
+    "collective.py", "heartbeat.py", "install_monitor.py", "private_files.py", "notice_state.py",
+    "coordination_jobs.py", "install_coordination_jobs.py", "tools/check.py", "test_*.py",
+]
 
 [[tool.mypy.overrides]]
 module = ["test_collective", "test_hardening"]
@@ -69,7 +74,10 @@ disallow_incomplete_defs = false
 
 [tool.coverage.run]
 branch = true
-source = ["collective", "heartbeat", "install_monitor"]   # module names: tests and tools stay out of the denominator
+# Select by FILE, not module name: modules load each other under private names (importlib), and coverage
+# decides per file on first sight, so a module-name source silently drops files first seen under another name.
+source = ["."]
+omit = ["test_*.py", "tools/*", "proof/*", "Collective.vault/*"]
 
 [tool.coverage.report]
 fail_under = 90

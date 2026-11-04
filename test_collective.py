@@ -398,6 +398,11 @@ class PassiveReads(unittest.TestCase):
 
 
 class NativeSocket(unittest.TestCase):
+    @override
+    def setUp(self) -> None:
+        metadata = mock.Mock(st_mode=0o140600, st_uid=os.getuid())
+        self.enterContext(mock.patch.object(os, "lstat", return_value=metadata))
+
     def backend(self) -> Any:
         return c.Backend(tuios_bin="/fixture/tuios", native_socket="/fixture/herdr.sock")
 
@@ -406,9 +411,15 @@ class NativeSocket(unittest.TestCase):
         sock.__enter__.return_value = sock
         sock.getsockopt.return_value = struct.pack("3i", os.getpid(), os.getuid(), os.getgid())
 
+        replied = False
+
         def response(_: Any) -> Any:
+            nonlocal replied
             if timeout:
                 raise TimeoutError("fixture timeout")
+            if replied:
+                raise BlockingIOError("no more queued bytes")
+            replied = True
             request = json.loads(sock.sendall.call_args.args[0])
             return (
                 json.dumps({"id": "wrong" if wrong_id else request["id"], "result": {"agents": []}}) + "\n"
@@ -426,6 +437,8 @@ class NativeSocket(unittest.TestCase):
         self.assertEqual(request["params"], {})
         self.assertTrue(sock.sendall.call_args.args[0].endswith(b"\n"))
         sock.connect.assert_called_once_with("/fixture/herdr.sock")
+        sock.sendall.assert_called_once()
+        self.assertEqual(sock.recv.call_count, 2)
 
     def test_write_and_extra_params_refused_before_connect(self) -> None:
         with mock.patch.object(socket, "socket") as factory:
@@ -444,13 +457,16 @@ class NativeSocket(unittest.TestCase):
             ):
                 self.backend().native_request("ping", {})
             self.assertEqual(sock.connect.call_count, 1)
+            sock.sendall.assert_called_once()
+            self.assertEqual(sock.recv.call_count, 1 if timeout else 2)
 
     def test_invalid_json_response_shape_is_a_bounded_error(self) -> None:
         sock = self.exchange()
-        sock.recv.side_effect = None
-        sock.recv.return_value = b"[]\n"
+        sock.recv.side_effect = [b"[]\n", BlockingIOError("no more queued bytes")]
         with mock.patch.object(socket, "socket", return_value=sock), self.assertRaises(c.CollectiveError):
             self.backend().native_request("ping", {})
+        sock.sendall.assert_called_once()
+        self.assertEqual(sock.recv.call_count, 2)
 
     def test_native_failure_keeps_tuios_roster(self) -> None:
         backend = self.backend()
@@ -475,13 +491,18 @@ class HeartbeatActivity(unittest.TestCase):
             sock = mock.MagicMock()
             sock.__enter__.return_value = sock
             sock.getsockopt.return_value = struct.pack("3i", os.getpid(), os.getuid(), os.getgid())
-            sock.recv.return_value = (json.dumps(response) + "\n").encode()
+            sock.recv.side_effect = [
+                (json.dumps(response) + "\n").encode(),
+                BlockingIOError("no more queued bytes"),
+            ]
             with (
                 self.subTest(response=response),
                 mock.patch.object(os, "lstat", return_value=metadata),
                 mock.patch.object(socket, "socket", return_value=sock),
             ):
                 self.assertIsNone(hb.herdr_agents())
+            sock.sendall.assert_called_once()
+            self.assertEqual(sock.recv.call_count, 2)
 
     def test_activity_inputs_are_metadata_and_passive(self) -> None:
         cases: list[Any] = [

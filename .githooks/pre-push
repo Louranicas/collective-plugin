@@ -1,0 +1,5 @@
+#!/bin/sh
+# git gives every outgoing ref on stdin; the history gate scans all of them (not just HEAD).
+COLLECTIVE_PUSH_REFS="$(cat)" || exit 1
+export COLLECTIVE_PUSH_REFS
+exec python3 -I tools/check.py

@@ -32,6 +32,8 @@ Agents on this desktop talk over five separate layers: tuios mail, native herdr,
 | `monitor [--state-dir D] [--notify]` | passive sweep | One `observe()`, plus the unread ids in the ring. Writes `latest.json` and `monitor-state.json`. On new unread ids since the last sweep, with the same daemon boot, it can send a desktop notification (`notify-send`) carrying a count only |
 | `mail-plan …` | write, step 1 | Writes a private plan and prints the digest |
 | `collaboration-plan --sender S --reviewer R --kind intent\|milestone\|blocker\|handoff\|review --goal G --scope S --done DOD [--evidence E]… --output P` | write, step 1 | The **first-class collaboration preset**. Builds a structured JSON body: owner, reviewer, goal, scope, definition of done, evidence (up to 16), and authority note. It is planned to the reviewer through the **same** mail gate. Owner and reviewer must be distinct current panes |
+| `coordination_jobs.py --job collaboration\|cohesion\|quality` | bounded job (timer-driven, §4.1) | Reads roster, ring and tasks, or runs offline gates; writes one private receipt. Exit 1 on `failed` or `degraded` |
+| `install_coordination_jobs.py` | operator install (Codex 3) | Verifies, backs up and enables the three job timers; rolls back on failure |
 | `mail-apply --plan P --confirm SHA256 [--journal J] [--keep-plan]` | write, step 2 | `tuios call send-agent-message`. **Deletes the plan after a successful submission by default** (`--keep-plan` retains it). A failed cleanup never turns success into a retry |
 
 Global flags:
@@ -94,7 +96,7 @@ Stated limits, from `capabilities`:
 
 ## 4. Ongoing comms: the scheduler
 
-There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one scheduler**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK; historical). It was paused by root during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in `Collective.vault/Evidence/Verification.md`); query current state with `systemctl --user is-active collective-heartbeat.timer`. There is no second timer.
+There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one notification gateway**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK; historical). It was paused by root during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in `Collective.vault/Evidence/Verification.md`); query current state with `systemctl --user is-active collective-heartbeat.timer`. On 2026-11-05 it was paused again for the zero-touch release and stays paused until host acceptance. No second notifier exists. The bounded jobs in §4.1 never notify.
 
 | Item | Detail |
 |---|---|
@@ -102,8 +104,29 @@ There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user tim
 | Installer | `install_monitor.py` (Codex 3) repoints the same units. Private unit backups go under `~/.local/state/collective-plugin/scheduler-backups/`; the receipt is `~/.local/state/collective-plugin/scheduler-install-receipt.json` (`installing` → `installed`, or `rolled-back` with the original error and `previous` = last accepted install) |
 | Cadence (FLEX, Luke 2026-11-04) | 2-min tick. A full sweep every tick while the collective is **active**: `needs_you`, mail sent in the last 15 min, or an unblocked card in plan/doing/verify/review. Otherwise a full sweep at most every 15 min |
 | Sweep | tuios roster (unread age, `needs_you`, `draft_held`); native herdr `agent.list` (`blocked` for more than 15 min); relay units; Tailscale peers. Writes a private board, `~/.local/state/collective/heartbeat.json`. The existing dedup state was retained |
-| Alerts | Change-only messages to Luke's tuios `human` inbox. A resolved alert re-arms. The relay alert is sent at most once a day; `ring-loss:<boot>` reminds at most once per 48 h. A verified daemon restart resets tuios mail/needs ages and acknowledgements. One-shot alerts persist as pending until delivered. Reads share a 45 s budget and the notice keeps a reserved 20 s, inside `TimeoutStartSec=90` |
+| Alerts | Change-only messages to Luke's tuios `human` inbox. A resolved alert re-arms. The relay alert is sent at most once a day; `ring-loss:<boot>` reminds at most once per 48 h. A verified daemon restart resets tuios mail/needs ages and acknowledgements. Every notice is journaled (§4.2). An uncertain outcome holds its alert keys and is **never resent automatically**. Reads share a 45 s budget and the notice keeps a reserved 20 s, inside `TimeoutStartSec=90` |
 | Off switch | `systemctl --user disable --now collective-heartbeat.timer` |
+
+### 4.1 Bounded coordination jobs (Codex 3 decision #582, 2026-11-05)
+
+Three separate user timers run `coordination_jobs.py --job collaboration|cohesion|quality`. Collaboration runs every 10 min and cohesion every 30 min, both starting 3 min after boot, each with a 90 s and 256 MB bound. Quality runs daily with 1 GB, 660 s for the service and 600 s for the command. Each timer adds a random delay of up to 30 s. Keeping them separate stops a slow quality run from blocking comms. Each job:
+
+- takes its own non-blocking lock, and skips if one is already running;
+- reads the roster, the ring (256 entries, marked `complete_history: false`) and task cards, read-only, 20 s each;
+- the quality job instead runs `tools/check.py --keep-going` offline, with private caches;
+- writes one schema-1, 0600 metadata receipt to `~/.local/state/collective/coordination/<job>.json`.
+
+Jobs never send mail, notify, wake agents or retry effects. Their metrics are descriptive. **Acceptance is never inferred** from submission, read flags, replies, owner names or task stages. The heartbeat reads the receipts and alerts `jobs:<name>` on a failed, degraded, unknown or stale receipt (stale after 30 min, 90 min and 48 h respectively). A missing receipt reads `awaiting-first-run` (not a pass) for 180 s after install, or 90,690 s for quality (25 h + 660 s + 30 s), then becomes `unknown`. A malformed or unreadable receipt is `unknown` immediately.
+
+`install_coordination_jobs.py` (Codex 3) installs the units under an exclusive lock. It runs `systemd-analyze --user verify` and backs up any prior managed units. It writes an `installing` / `installed` / `rolled-back` receipt, and on failure restores each timer's enabled and active state. It refuses to overwrite units it does not manage. **On 2026-11-05 the jobs are proposed and not installed.** Operator detail is in the vault Scheduler Runbook.
+
+### 4.2 Notice journal
+
+`notice_state.py` holds pure, bounded transitions; it does no I/O. The heartbeat reserves each human notice as a durable **intent** before dispatch, recording a request id, a body digest, its alert keys, the boot id and the endpoint. It finishes the notice as `submitted`, `refused` or `unknown`. A persisted intent loads as `unknown`. Only a documented refusal releases the keys, with a backoff from 5 min to 1 h. An `unknown` notice keeps its keys held and is reconciled to `submitted` only when exactly one matching ring entry is found in the same daemon boot. A stored submission is not a read receipt or acceptance.
+
+### 4.3 Private file reads
+
+`private_files.py` opens the parent directory first, then the leaf by `dir_fd`, with `O_NOFOLLOW|O_NONBLOCK`. It checks owner, mode, link count and type, and bounds each read (64 KiB by default, 2 MB at most). Two policies exist: private state (0700 directory, 0600 file) and owned units. It reduces same-user races and FIFO waits; it does not isolate against an adversarial process running as the same user.
 
 A sweep is passive: it sends no replies, marks nothing read and starts no model turns. Each agent keeps its own session check where its harness allows one. Claude checks about every 7 minutes, session-only, expiring after 7 days. Codex sessions have no in-session scheduler and rely on tuios mail-wake plus this timer. `collective.py monitor` is the plugin's own one-shot sweep, for manual or future use; no timer runs it.
 

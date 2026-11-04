@@ -16,7 +16,10 @@ Use --dry-run to print the board and the alert without sending.
 
 from __future__ import annotations
 
+import datetime as dt
 import fcntl
+import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -29,9 +32,29 @@ import sys
 import tempfile
 import time
 import unicodedata
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, TypedDict, cast
+from typing import IO, TYPE_CHECKING, TypedDict, cast
+
+if TYPE_CHECKING:
+    from notice_state import NoticeRecord
+
+_files_spec = importlib.util.spec_from_file_location(
+    "heartbeat_private_files", Path(__file__).with_name("private_files.py")
+)
+if _files_spec is None or _files_spec.loader is None:
+    raise ImportError("Cannot load reviewed private file readers")
+_private_files = importlib.util.module_from_spec(_files_spec)
+_files_spec.loader.exec_module(_private_files)
+
+_notice_spec = importlib.util.spec_from_file_location(
+    "heartbeat_notice_state", Path(__file__).with_name("notice_state.py")
+)
+if _notice_spec is None or _notice_spec.loader is None:
+    raise ImportError("Cannot load reviewed notification state")
+_notice_state = importlib.util.module_from_spec(_notice_spec)
+_notice_spec.loader.exec_module(_notice_state)
 
 MAX_BYTES = 2_000_000
 MAX_BOOT_BYTES = 128
@@ -54,13 +77,17 @@ RELAY_UNITS = ("ssh-independent-relay-machine-tunnel.service", "ssh-independent-
 WATCH_PEERS = tuple(p.strip() for p in os.environ.get("COLLECTIVE_WATCH_PEERS", "").split(",") if p.strip())
 SESSION = os.environ.get("COLLECTIVE_SESSION", "session-0")  # pinned; never sent --from a pane
 # Alert keys with these prefixes are cleared when the condition resolves, so a recurrence alerts again.
-RESOLVABLE = ("mail:", "needs:", "peer:", "tuios-read", "herdr-read")
+RESOLVABLE = ("mail:", "needs:", "peer:", "jobs:", "tuios-read", "herdr-read")
 # One-shot transition alerts stay pending until a notice carrying them is delivered.
 TRANSIENT = ("peer:", "ring-loss:")
 # FLEX cadence (Luke, 2026-11-04): the timer ticks every 2 min. A full run happens every tick while the
 # collective is ACTIVE, and at most every QUIET_FULL_S while it is quiet. Alerts stay change-only.
 ACTIVE_MAIL_S = 15 * 60
 QUIET_FULL_S = 15 * 60
+JOB_START_GRACE_S = 180.0
+# A fresh daily timer need not fire before the next calendar day. Allow a
+# 25-hour local day at DST fallback, plus its service deadline and jitter.
+QUALITY_FIRST_RUN_GRACE_S = 25 * 3600 + 660 + 30
 ACTIVE_STAGES = {"doing", "verify", "review", "plan"}
 
 
@@ -97,16 +124,28 @@ def herdr_agents() -> list[dict[str, str | None]] | None:
             credentials = s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
             require(condition=struct.unpack("3i", credentials)[1] == os.getuid(), message="Herdr peer UID mismatch")
             s.sendall(b'{"id":"collective-heartbeat","method":"agent.list","params":{}}\n')
-            buf = b""
+            buf = bytearray()
             while b"\n" not in buf:
                 remaining = deadline - time.monotonic()
                 require(condition=remaining > 0, message="Herdr response deadline exceeded")
                 s.settimeout(remaining)
                 chunk = s.recv(65536)
+                require(condition=bool(chunk), message="Herdr response ended before newline")
+                require(condition=len(buf) + len(chunk) <= MAX_BYTES, message="Herdr response exceeds limit")
+                buf.extend(chunk)
+            require(condition=not buf.split(b"\n", 1)[1].strip(), message="Herdr response has trailing data")
+            s.settimeout(0.0)
+            while True:
+                require(condition=time.monotonic() < deadline, message="Herdr response deadline exceeded")
+                try:
+                    chunk = s.recv(65536)
+                except BlockingIOError:
+                    break
                 if not chunk:
                     break
-                buf += chunk
-                require(condition=len(buf) <= MAX_BYTES, message="Herdr response exceeds limit")
+                require(condition=len(buf) + len(chunk) <= MAX_BYTES, message="Herdr response exceeds limit")
+                require(condition=not chunk.strip(), message="Herdr response has trailing data")
+                buf.extend(chunk)
         response = json.loads(buf.split(b"\n", 1)[0])
         if not isinstance(response, dict) or response.get("id") != "collective-heartbeat" or response.get("error"):
             return None
@@ -246,23 +285,11 @@ def secure_state_dir() -> None:
 def load[T](name: str, default: T) -> T:
     """Load a bounded private regular state file or a missing-file default."""
     try:
-        fd = os.open(STATE / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        return cast("T", _private_files.read_private_json(STATE / name, limit=MAX_BYTES))
     except FileNotFoundError:
         return default
-    with os.fdopen(fd) as fh:
-        st = os.fstat(fh.fileno())
-        if (
-            not stat.S_ISREG(st.st_mode)
-            or st.st_uid != os.getuid()
-            or stat.S_IMODE(st.st_mode) != PRIVATE_MODE
-            or st.st_nlink != 1
-            or st.st_size > MAX_BYTES
-        ):
-            raise ValueError("heartbeat: state file must be private, owned, regular and singly linked")
-        try:
-            return cast("T", json.load(fh))
-        except (ValueError, TypeError):
-            return default
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return default
 
 
 def save(name: str, obj: object) -> None:
@@ -340,12 +367,17 @@ class MemoryState(TypedDict):
     notice_rc: int
     ring_boot: str
     ring_evicted: int
+    notices: list[NoticeRecord]
+    notice_issue: str
+    notice_legacy_hold: bool
 
 
 def memory_state(value: object) -> MemoryState:
     """Refuse malformed private state before any notification effect."""
     if not isinstance(value, dict):
         raise TypeError("Malformed heartbeat memory")
+    if type(value.get("notice_legacy_hold", False)) is not bool:
+        raise ValueError("Malformed legacy notice hold")
     maps: dict[str, dict[str, float]] = {}
     for name in ("unread_since", "needs_since", "sent"):
         entries = value.get(name, {})
@@ -377,6 +409,14 @@ def memory_state(value: object) -> MemoryState:
         "notice_rc": int(number(value.get("notice_rc"))),
         "ring_boot": str(value.get("ring_boot", ""))[:MAX_BOOT_BYTES],
         "ring_evicted": max(0, int(number(value.get("ring_evicted")))),
+        "notices": cast("list[NoticeRecord]", _notice_state.load_records(value.get("notices"))),
+        "notice_issue": metadata(value.get("notice_issue", ""), 256),
+        "notice_legacy_hold": bool(value.get("notice_legacy_hold"))
+        or (
+            "notices" not in value
+            and number(value.get("notice_failures")) > 0
+            and number(value.get("notice_attempt")) > 0
+        ),
     }
 
 
@@ -384,7 +424,9 @@ def main() -> int:
     """Run one heartbeat with a private nonblocking process lock."""
     dry = "--dry-run" in sys.argv
     secure_state_dir()
-    lock_fd = os.open(STATE / "heartbeat.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    lock_fd = os.open(
+        STATE / "heartbeat.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, 0o600
+    )
     lock_stat = os.fstat(lock_fd)
     if (
         not stat.S_ISREG(lock_stat.st_mode)
@@ -428,6 +470,8 @@ def agent_rows(
         live.add(wid)
         unread = int(number(a.get("unread")))
         needs = bool(a.get("needs_you"))
+        queued = max(0, int(number(a.get("queued"))))
+        draft_held = bool(a.get("draft_held"))
         if unread:
             mem["unread_since"].setdefault(wid, now)
         else:
@@ -440,7 +484,10 @@ def agent_rows(
         u_age = now - mem["unread_since"].get(wid, now)
         n_age = now - mem["needs_since"].get(wid, now)
         if unread and u_age >= STALE_MAIL_S:
-            alerts.append((f"mail:{wid}", f"{label}: {unread} unread tuios message(s) for {int(u_age // 60)} min"))
+            observed = f"observed draft_held={draft_held}, queued={queued}; inspect the recipient state"
+            alerts.append(
+                (f"mail:{wid}", f"{label}: {unread} unread tuios message(s) for {int(u_age // 60)} min; {observed}")
+            )
         if needs and n_age >= NEEDS_YOU_S:
             alerts.append((f"needs:{wid}", f"{label}: waiting on you (approval/question) for {int(n_age // 60)} min"))
         rows.append(
@@ -450,7 +497,13 @@ def agent_rows(
                 "state": a.get("state"),
                 "unread": unread,
                 "needs_you": needs,
-                "draft_held": bool(a.get("draft_held")),
+                "draft_held": draft_held,
+                "queued": queued,
+                "comms_state": "attention"
+                if (unread and u_age >= STALE_MAIL_S) or (needs and n_age >= NEEDS_YOU_S)
+                else "pending"
+                if unread or needs or queued
+                else "clear",
             }
         )
     return rows, live
@@ -516,6 +569,74 @@ def peer_alerts(pr: dict[str, bool], mem: MemoryState, alerts: list[tuple[str, s
             mem["peers"][host] = isnow
 
 
+def receipt_age(value: object, now: float) -> float:
+    """Require an aware, nonfuture timestamp before describing receipt freshness."""
+    if not isinstance(value, str):
+        raise TypeError("Receipt timestamp is missing")
+    timestamp = dt.datetime.fromisoformat(value)
+    if timestamp.tzinfo is None or timestamp.timestamp() > now + 60:
+        raise ValueError("Receipt timestamp is unqualified")
+    return max(0.0, now - timestamp.timestamp())
+
+
+def coordination_receipt(job: str, now: float, stale_after: float) -> dict[str, object]:
+    """Read metadata from an exact bounded private job receipt, never its captured command output."""
+    value = _private_files.read_private_json(STATE / "coordination" / f"{job}.json")
+    if (
+        not isinstance(value, dict)
+        or type(value.get("schema")) is not int
+        or value.get("schema") != 1
+        or value.get("job") != job
+    ):
+        raise ValueError("Job receipt identity/schema is invalid")
+    age = receipt_age(value.get("generated_utc"), now)
+    status = value.get("status")
+    if not isinstance(status, str) or status not in {"ok", "failed", "degraded"}:
+        raise ValueError("Job outcome is unqualified")
+    return {"status": status, "age_s": round(age, 1), "stale": age > stale_after}
+
+
+def coordination_status(now: float) -> tuple[dict[str, object], list[tuple[str, str]]]:
+    """Observe the installed collaboration schedules without launching jobs or model turns."""
+    alerts: list[tuple[str, str]] = []
+    try:
+        installed = _private_files.read_private_json(STATE / "coordination" / "installer.json")
+    except FileNotFoundError:
+        return {"status": "not-installed"}, alerts
+    except (OSError, ValueError):
+        return {"status": "unknown"}, [
+            ("jobs:installation", "Coordination schedule receipt unavailable; inspect local state")
+        ]
+    if not isinstance(installed, dict) or installed.get("status") != "installed":
+        return {"status": "unknown"}, [("jobs:installation", "Coordination schedule installation is not confirmed")]
+    try:
+        installed_age = receipt_age(installed.get("generated_utc"), now)
+    except (TypeError, ValueError):
+        installed_age = math.inf
+    jobs: dict[str, object] = {}
+    for name, age_limit in (("collaboration", 1800), ("cohesion", 5400), ("quality", 172800)):
+        grace_limit = QUALITY_FIRST_RUN_GRACE_S if name == "quality" else JOB_START_GRACE_S
+        try:
+            row = coordination_receipt(name, now, age_limit)
+        except FileNotFoundError:
+            row = {"status": "awaiting-first-run" if installed_age < grace_limit else "unknown"}
+        except (OSError, TypeError, ValueError):
+            row = {"status": "unknown"}
+        jobs[name] = row
+        if row["status"] in {"failed", "degraded", "unknown"} or row.get("stale"):
+            alerts.append(
+                (
+                    f"jobs:{name}",
+                    f"Coordination {name} receipt is {row['status']} or stale; inspect private job receipt",
+                )
+            )
+    return {
+        "status": "attention" if alerts else "observed",
+        "jobs": jobs,
+        "meaning": "Receipt observations do not prove agent execution, task acceptance or completion",
+    }, alerts
+
+
 def sweep(*, dry: bool) -> int:
     """Perform one serialized observation and persist deduplication state."""
     now = time.time()
@@ -544,11 +665,14 @@ def sweep(*, dry: bool) -> int:
     relay_alerts(rl, alerts)
     pr = peers()
     peer_alerts(pr, mem, alerts)
+    coordination, job_alerts = coordination_status(now)
+    alerts.extend(job_alerts)
     board: dict[str, object] = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
         "agents": rows,
         "relay": rl,
         "peers": pr,
+        "coord_jobs": coordination,
         "herdr": None
         if ha is None
         else {
@@ -566,13 +690,14 @@ def sweep(*, dry: bool) -> int:
     return finish(board, mem, alerts, now, dry=dry)
 
 
-def notice_batch(new: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], str]:
+def notice_batch(new: list[tuple[str, str]], *, request_id: str = "") -> tuple[list[tuple[str, str]], str]:
     """Fit whole alerts and the footer into a UTF-8 byte budget; return only included alerts."""
     max_alerts, max_bytes = 16, 7000
 
     def render(rows: list[tuple[str, str]]) -> str:
         return (
             "Collective heartbeat: passive checks; change-only alerts.\n- "
+            + (f"Request {request_id}.\n- " if request_id else "")
             + "\n- ".join(metadata(text, 256) for _, text in rows)
             + f"\nAdditional pending alerts: {len(new) - len(rows)}. "
             "Full board: ~/.local/state/collective/heartbeat.json"
@@ -590,27 +715,186 @@ def notice_batch(new: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], str
 
 
 def notify(new: list[tuple[str, str]], mem: MemoryState, now: float) -> None:
-    """Bound human notices and back off failures; never automatically invoke models."""
-    backoff = min(3600, 300 * 2 ** min(mem["notice_failures"], 4))
-    if mem["notice_failures"] and now - mem["notice_attempt"] < backoff:
+    """Journal one fixed-human notice; uncertain effects are held, never automatically retried."""
+    if mem["notice_legacy_hold"]:
+        mem["notice_issue"] = "Legacy notice attempt has no receipt binding; held pending inbox reconciliation."
         return
-    selected, body = notice_batch(new)
+    backoff = min(3600, 300 * 2 ** min(mem["notice_failures"], 4))
+    last = mem["notices"][-1]["status"] if mem["notices"] else ""
+    if last == "refused" and mem["notice_failures"] and now - mem["notice_attempt"] < backoff:
+        return
+    held = _notice_state.held_keys(mem["notices"])
+    request_id = str(uuid.uuid4())
+    selected, body = notice_batch([(k, t) for k, t in new if k not in held], request_id=request_id)
     if not selected:
         return
+    try:
+        mem["notices"] = _notice_state.reserve(
+            mem["notices"],
+            request_id=request_id,
+            digest=hashlib.sha256(body.encode()).hexdigest(),
+            keys=[k for k, _ in selected],
+            boot_id=mem["ring_boot"],
+            endpoint=notice_endpoint(),
+            now=now,
+        )
+    except ValueError as exc:
+        mem["notice_issue"] = metadata(f"Notice held before dispatch: {exc}", 256)
+        save("memory.json", mem)
+        return
     mem["notice_attempt"] = now
-    # Persist intent before sending; a process interruption must also observe backoff.
+    # Crash recovery converts this durable intent to UNKNOWN and holds its alert keys.
     mem["notice_failures"] += 1
     save("memory.json", mem)
-    rc, _ = run(
-        [TUIOS, "send-agent-message", "-s", SESSION, "-w", "human", "--subject", "collective heartbeat", body],
+    rc, output = run(
+        [
+            TUIOS,
+            "send-agent-message",
+            "-s",
+            SESSION,
+            "-w",
+            "human",
+            "--json",
+            "--subject",
+            "collective heartbeat",
+            body,
+        ],
         NOTICE_S,
         reserved=True,
     )
     mem["notice_rc"] = rc
-    if rc == 0:
+    status, message_id = notice_result(rc, output)
+    mem["notices"] = _notice_state.finish(mem["notices"], request_id, status=status, message_id=message_id)
+    if status == "submitted":
         mem["notice_failures"] = 0
+        mem["notice_issue"] = ""
         for key, _ in selected:
             mem["sent"][key] = now
+    elif status == "unknown":
+        mem["notice_failures"] = 0
+        mem["notice_issue"] = "Notice outcome unknown; held without automatic resend. Inspect the human inbox."
+
+
+def notice_endpoint() -> str:
+    """Bind receipts to the selected local client/server/session, without asserting identity."""
+    value = [os.path.realpath(TUIOS), os.environ.get("TUIOS_SERVER", ""), SESSION]
+    return hashlib.sha256(json.dumps(value, ensure_ascii=True).encode()).hexdigest()
+
+
+def notice_result(rc: int, output: str) -> tuple[str, int | None]:
+    """Only a documented rejection is refused; only a positive ID at exit zero is submitted."""
+    try:
+        value = json.loads(output)
+    except (ValueError, TypeError):
+        return "unknown", None
+    if not isinstance(value, dict):
+        return "unknown", None
+    error = value.get("error")
+    code = error.get("code") if isinstance(error, dict) else None
+    refused = {
+        "invalid_request",
+        "unknown_verb",
+        "invalid_params",
+        "session_not_found",
+        "window_not_found",
+        "forbidden",
+        "not_human",
+        "loop_refused",
+        "rate_limited",
+        "agents_disabled",
+    }
+    if isinstance(code, str) and code in refused:
+        return "refused", None
+    if rc or error or value.get("success") is False:
+        return "unknown", None
+    message_id = value.get("message_id")
+    if type(message_id) is int and message_id > 0:
+        return "submitted", message_id
+    return "unknown", None
+
+
+def notice_ring_snapshot() -> tuple[str, list[object]] | None:
+    """Read a passive ring bracketed by matching daemon-generation observations."""
+    outputs: list[dict[str, object]] = []
+    for argv in (
+        [TUIOS, "call", "list-attention", "{}"],
+        [TUIOS, "read-agent-messages", "-s", SESSION, "--limit", "100", "--json"],
+        [TUIOS, "call", "list-attention", "{}"],
+    ):
+        rc, output = run(argv)
+        if rc:
+            return None
+        try:
+            value = json.loads(output)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(value, dict) or value.get("success") is False or value.get("error"):
+            return None
+        outputs.append(value)
+    before, ring, after = outputs
+    boot = before.get("boot_id")
+    if not isinstance(boot, str) or not boot or boot != after.get("boot_id"):
+        return None
+    messages = ring.get("messages")
+    if not isinstance(messages, list):
+        return None
+    return boot, messages
+
+
+def matching_notice_ids(messages: list[object], record: NoticeRecord) -> set[int]:
+    """Match the exact request/body/route evidence, without treating labels as authenticated identity."""
+    matches: set[int] = set()
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        text, message_id = message.get("text"), message.get("id")
+        if (
+            message.get("to") == "human"
+            and message.get("session") == SESSION
+            and isinstance(text, str)
+            and type(message_id) is int
+            and message_id > 0
+            and f"Request {record['request_id']}." in text
+            and hashlib.sha256(text.encode()).hexdigest() == record["digest"]
+        ):
+            matches.add(message_id)
+    return matches
+
+
+def reconcile_notices(mem: MemoryState, protected: set[str], now: float) -> None:
+    """Passively reconcile exact stored human notices; missing/evicted evidence never authorizes retry."""
+    candidates = [
+        r
+        for r in mem["notices"]
+        if r["status"] == "unknown" and r["held_keys"] and r["boot_id"] and r["endpoint"] == notice_endpoint()
+    ]
+    snapshot = notice_ring_snapshot() if candidates else None
+    if snapshot is None:
+        return
+    boot, messages = snapshot
+    for record in candidates:
+        if record["boot_id"] != boot:
+            continue
+        matches = matching_notice_ids(messages, record)
+        if len(matches) == 1:
+            mem["notices"] = _notice_state.finish(
+                mem["notices"], record["request_id"], status="submitted", message_id=matches.pop()
+            )
+            for key in record["held_keys"]:
+                if key in protected:
+                    mem["sent"][key] = now
+
+
+def notice_summary(mem: MemoryState) -> dict[str, object]:
+    """Expose bounded outcome metadata; submission remains distinct from human read or acceptance."""
+    return {
+        "records": len(mem["notices"]),
+        "unknown_outcomes": sum(r["status"] == "unknown" for r in mem["notices"]),
+        "held_alerts": len(_notice_state.held_keys(mem["notices"])),
+        "legacy_unknown_hold": mem["notice_legacy_hold"],
+        "issue": mem["notice_issue"],
+        "meaning": "Stored submission is not a read receipt or acceptance; unknown notices are not resent.",
+    }
 
 
 def forget_tuios_tracking(mem: MemoryState) -> None:
@@ -620,6 +904,13 @@ def forget_tuios_tracking(mem: MemoryState) -> None:
     mem["sent"] = {
         k: v for k, v in mem["sent"].items() if not k.startswith(("mail:", "needs:")) or k.startswith("needs:hblocked:")
     }
+    old_episode = {
+        k
+        for k in _notice_state.held_keys(mem["notices"])
+        if k.startswith(("mail:", "needs:")) and not k.startswith("needs:hblocked:")
+    }
+    # A verified daemon generation change ends these observations, not their unknown delivery history.
+    mem["notices"] = _notice_state.resolve_keys(mem["notices"], old_episode)
 
 
 def ring_alert(mem: MemoryState, alerts: list[tuple[str, str]]) -> str | None:
@@ -660,6 +951,15 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
     # failed read) and are forgotten on resolution, so a recurrence alerts again. Reminder and obsolete
     # keys (relay day, ring-loss boot, peer transitions) expire after OBSOLETE_S.
     tracked = {f"mail:{k}" for k in mem["unread_since"]} | {f"needs:{k}" for k in mem["needs_since"]}
+    protected = active | tracked
+    resolved = {
+        k
+        for k in _notice_state.held_keys(mem["notices"])
+        if k.startswith(("mail:", "needs:", "peer:")) and k not in protected
+    }
+    mem["notices"] = _notice_state.resolve_keys(mem["notices"], resolved)
+    if not dry:
+        reconcile_notices(mem, protected, now)
     mem["sent"] = {
         k: v
         for k, v in mem["sent"].items()
@@ -675,6 +975,7 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
         if f"peer:{h}:False" in active:
             mem["sent"].pop(f"peer:{h}:True", None)
     new = [(k, t) for k, t in alerts if k not in mem["sent"]]
+    board["notifications"] = notice_summary(mem)
     if dry:
         print(json.dumps(board, indent=2))
         print("WOULD SEND:" if new else "nothing new to send", *[t for _, t in new], sep="\n  ")
@@ -684,6 +985,8 @@ def finish(board: dict[str, object], mem: MemoryState, alerts: list[tuple[str, s
     if new:
         notify(new, mem, now)
         mem["pending"] = {k: t for k, t in mem["pending"].items() if k not in mem["sent"]}
+        board["notifications"] = notice_summary(mem)
+        save("heartbeat.json", board)
     save("memory.json", mem)
     return 0
 

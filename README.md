@@ -5,7 +5,7 @@
 One passive view of how the agents on this desktop communicate (tuios, native herdr, MemPalace, atuin and local SSH state), plus one reviewed write lane: local tuios mail.
 
 - Python standard library only.
-- **Prototype, enabled locally** in tuios and native herdr (read-only actions verified). Public repositories require CI before merge. Check `tuios plugins info local.collective` for live state. The canonical command is `python3 -I tools/check.py`: nine gates covering policy selftests, publication hygiene, architecture rules, format, lint, strict types, security, behavioral tests and ≥90% aggregate/per-module coverage. Source hashes and measured results are in the [current acceptance receipt](Collective.vault/Evidence/Verification.md#current-acceptance-receipt-2026-11-04-supersedes-the-82--and-83-test-counts-above). Earlier test counts are dated history.
+- **Prototype, enabled locally** in tuios and native herdr (read-only actions verified). Public repositories require CI before merge. Check `tuios plugins info local.collective` for live state. The canonical command is `python3 -I tools/check.py`: eleven gates covering policy selftests, publication hygiene, pushed-history secrets, diagram receipts, architecture rules, format, lint, strict types, security, behavioral tests and ≥90% aggregate/per-module coverage. Source hashes and measured results are in the [current acceptance receipt](Collective.vault/Evidence/Verification.md#current-acceptance-receipt-2026-11-04-supersedes-the-82--and-83-test-counts-above). Earlier test counts are dated history.
 - Design and safety model: [DESIGN.md](DESIGN.md).
 - Reference vault (architecture, workflow, operations, evidence): [Collective.vault/Home.md](Collective.vault/Home.md).
 
@@ -78,7 +78,7 @@ Verification receipt, including planted-failure controls: [DESIGN.md §8](DESIGN
 
 ## Ongoing comms
 
-There is one systemd user timer, `collective-heartbeat.timer`, which runs `heartbeat.py` from this repo (owner Codex 3); there is no cron on Kinoite. It was paused during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in [Verification](Collective.vault/Evidence/Verification.md)); query current state with `systemctl --user is-active collective-heartbeat.timer`. It uses a flexible cadence: every 2 min while the team is active, every 15 min while quiet. It alerts Luke only on changes. See [DESIGN.md §4](DESIGN.md#4-ongoing-comms-the-scheduler).
+There is one **notification gateway**, the systemd user timer `collective-heartbeat.timer`, which runs `heartbeat.py` from this repo (owner Codex 3). There is no cron on Kinoite. Three bounded job timers (collaboration every 10 min, cohesion every 30 min, quality daily; [DESIGN.md §4.1](DESIGN.md#41-bounded-coordination-jobs-codex-3-decision-582-2026-11-05)) write private receipts and never notify. They were proposed and not installed on 2026-11-05. It was paused during hardening and observed active again after host acceptance on 2026-11-05 (dated evidence in [Verification](Collective.vault/Evidence/Verification.md)); query current state with `systemctl --user is-active collective-heartbeat.timer`. It uses a flexible cadence: every 2 min while the team is active, every 15 min while quiet. It alerts Luke only on changes. See [DESIGN.md §4](DESIGN.md#4-ongoing-comms-the-scheduler).
 
 Development process (ownership, updates, best-of-N with tuios fan-out): see [DESIGN.md §7](DESIGN.md#7-development-process).
 
