@@ -203,7 +203,7 @@ This was the accepted local snapshot before the delivery follow-up; it is retain
 
 - GitLab `main` protection now reads push **No one**, merge Maintainers, force-push off. This supersedes "push limited to Maintainers" above.
 - For current counts and hashes, cite the latest receipt rather than any figure in this note: `python3 -I tools/check.py --keep-going --receipt R.json`, the CI run for the head SHA, and Codex 2's review artifacts.
-- Scope of the 2026-11-05 local receipt's sentence "the source is not yet pushed to either public repo": it applies **only to the follow-up fix hashes**. The earlier reviewed source (`ed065371`) was already public on GitHub (`feat/collective-comms`, PR #1) and passed CI; GitLab held only the bootstrap.
+- The "Historical 98-test acceptance" sentence "the source is not yet pushed to either public repo" was true when that receipt was measured. That receipt's hashes (`collective.py` `960760ae`, `test_hardening.py` `63210472`) match revision `ed065371`. The sentence was later superseded when `ed065371` was pushed to GitHub (`feat/collective-comms`, PR #1) and passed CI; GitLab held only the bootstrap.
 
 ### Host acceptance of code revision `42bf838` (2026-11-05 Australia/ACT)
 

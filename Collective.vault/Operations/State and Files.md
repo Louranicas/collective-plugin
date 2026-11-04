@@ -11,7 +11,7 @@ tags: [collective, operations]
 
 | Path | Owner | Mode | Contents | Lifetime |
 |---|---|---|---|---|
-| `~/tuios-setup/collective-plugin/` | Codex 3 (source), Codex 2 (tests), Claude (docs) | git; local baseline and review fix commits; source not yet pushed | Canonical plugin (registered in tuios and native herdr) | Until the source candidate is pushed |
+| `~/tuios-setup/collective-plugin/` | Codex 3 (source), Codex 2 (tests), Claude (docs) | git; source on GitHub `feat/collective-comms` (PR #1, draft at the 2026-11-05 snapshot; GitLab main held only the bootstrap then; query remotes for current state) | Canonical plugin (registered in tuios and native herdr) | Canonical local checkout |
 | `~/.config/systemd/user/collective-heartbeat.{timer,service}` | Codex 3 | user units | The **one** scheduler | Disable to stop |
 | `~/.local/state/collective/heartbeat.json` | heartbeat | 0600 in a 0700 dir | Board: agents, herdr counts, relay, peers, alerts, flex | Rewritten each full sweep |
 | `~/.local/state/collective/memory.json` | heartbeat | 0600 | Dedup keys, pending one-shot alerts, unread/needs ages, ring boot and evicted count, `last_full`, mode | Persists |
