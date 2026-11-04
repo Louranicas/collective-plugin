@@ -27,7 +27,7 @@ Owner: collective-claude (card Q1). Scope: `local.collective` (the collective.py
 | Network exposure | Unix sockets only; no listeners | Fitness F5 |
 | Shell injection | argv-only subprocess through one door per module; no `shell=` | Fitness F1/F2; bandit; ruff S |
 | Peer impersonation (`--from`) | Plans rebuild sender and recipient identity (live pane, session, foreground, harness, boot id) before apply | `validate_mail_plan` tests; planted red (digest) |
-| Replay or double send | One-use journal under `flock`; intent journaled before submit; timeout means unknown with no resend | Journal tests; planted red (replay ×4) |
+| Replay or double send | One-use journal under `flock`; intent journaled before submit; any ambiguous outcome (see DESIGN §3 Apply) means unknown with no resend | Journal tests; planted red (replay ×4) |
 | Plan tampering | sha256 digest over the canonical plan, compared in constant time against both the confirmation and the stored digest | Planted red (digest) |
 | Symlink and permission attacks on state | 0700 directories, 0600 files, `O_NOFOLLOW`, owner, nlink and regular-file checks | Fitness F4; tests |
 | Hidden or deceptive text | Control, bidi and zero-width characters refused in subjects and bodies; output passed through `clean()` | Tests |

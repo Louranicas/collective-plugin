@@ -80,7 +80,7 @@ digest = sha256(canonical JSON of everything except digest)
 2. Checks the key set exactly, schema 1, `issued_at <= now < expires_at`, and the digest against both `--confirm` and the plan, compared in constant time.
 3. **Rebuilds the plan** from a fresh snapshot. Any change to the endpoint, daemon `boot_id`, or either pane's agent session, foreground program or harness means **refused, prepare a new plan**.
 4. Journal, under `flock`: refuses a digest or request id seen before (**one-use**), and refuses past 10 intents per sender per minute. Then it appends an `intent` line **before** submitting. The line holds digest, request id, sender, recipient, body SHA-256 and byte count; no body.
-5. Submits through `tuios call send-agent-message` with argv JSON and no shell. It records the outcome as `submitted`, `refused` or `unknown`. A timeout counts as **unknown**: check the recipient's inbox, and **never** resend automatically.
+5. Submits through `tuios call send-agent-message` with argv JSON and no shell. It records the outcome as `submitted`, `refused` or `unknown`. Only a failure to launch the tool, or an error carrying a documented refusal code (`REFUSAL_CODES` in `collective.py`), counts as **refused**. A timeout, the output cap, a nonzero exit or error envelope without such a code, and any I/O failure after the child starts all count as **unknown**: the mail may already be delivered, so check the recipient's inbox and **never** resend automatically. If recording the final outcome fails, the delivery result is still reported with a journal note, and the consumed intent still refuses replay.
 
 A submission is not a reply or an acceptance. The only acknowledgement between agents is a `--reply-to` answer.
 
