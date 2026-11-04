@@ -14,7 +14,7 @@ gates:
   timeout: 15m
   variables:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    GIT_DEPTH: "1"
+    GIT_DEPTH: "0"            # the history gate scans all of HEAD and refuses a shallow clone
   before_script:
     - python -m pip install ruff==0.17.3 mypy==2.4.1 bandit==1.9.4 coverage==7.17.1
   script:

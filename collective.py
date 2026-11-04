@@ -14,6 +14,7 @@ import datetime as dt
 import fcntl
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 import select
@@ -28,6 +29,16 @@ import time
 import uuid
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Protocol, cast
+
+_files_spec = importlib.util.spec_from_file_location(
+    "collective_private_files", Path(__file__).with_name("private_files.py")
+)
+if _files_spec is None or _files_spec.loader is None:
+    raise ImportError("Cannot load reviewed private file readers")
+_private_files = importlib.util.module_from_spec(_files_spec)
+_files_spec.loader.exec_module(_private_files)
+read_owned_bytes = _private_files.read_owned_bytes
+parse_json = _private_files.parse_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -338,7 +349,7 @@ def locked_private_file(path: str | os.PathLike[str], *, blocking: bool = True) 
     """Open a private, single-link regular file under an exclusive flock; fsync on clean exit."""
     path = Path(path)
     private_dir(path.parent)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, PRIVATE_FILE_MODE)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK, PRIVATE_FILE_MODE)
     try:
         if not _is_private_regular(os.fstat(fd)):
             msg = "Journal must be an owned, private regular file with one link"
@@ -360,7 +371,7 @@ def locked_private_file(path: str | os.PathLike[str], *, blocking: bool = True) 
 
 def _journal_rows(f: IO[str]) -> list[JsonDict]:
     try:
-        rows = [json.loads(line) for line in f if line.strip()]
+        rows = [parse_json(line) for line in f if line.strip()]
     except ValueError as exc:
         msg = "Journal is corrupt; refuse writes until reviewed"
         raise CollectiveError(msg) from exc
@@ -495,14 +506,14 @@ def apply_mail_plan(
 def _remaining(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        msg = "Command timed out; outcome unknown"
+        msg = "Command timed out"
         raise TransportUncertain(msg)
     return remaining
 
 
 def _check_output_cap(output: bytearray, errors: bytearray) -> None:
     if len(output) + len(errors) > MAX_TOOL_OUTPUT:
-        msg = "Tool output exceeded 2 MB; outcome unknown"
+        msg = "Tool output exceeded 2 MB"
         raise TransportUncertain(msg)
 
 
@@ -527,10 +538,25 @@ def _recv_frame(s: socket.socket, deadline: float) -> bytearray:
         if not part:
             msg = "Herdr socket closed before its response"
             raise CollectiveError(msg)
-        response.extend(part)
-        if len(response) > MAX_TOOL_OUTPUT:
+        if len(response) + len(part) > MAX_TOOL_OUTPUT:
             msg = "Herdr socket response too large"
             raise CollectiveError(msg)
+        response.extend(part)
+    if response.split(b"\n", 1)[1].strip():
+        raise CollectiveError("Herdr socket returned trailing data")
+    # Inspect bytes already queued, without waiting for hypothetical future traffic.
+    s.settimeout(0.0)
+    while True:
+        _remaining(deadline)
+        try:
+            part = s.recv(READ_CHUNK)
+        except BlockingIOError:
+            break
+        if not part:
+            break
+        if len(response) + len(part) > MAX_TOOL_OUTPUT or part.strip():
+            raise CollectiveError("Herdr socket returned excess or trailing data")
+        response.extend(part)
     return response
 
 
@@ -553,17 +579,17 @@ def _parse_tool_result(
     if returncode:
         envelope: object = None
         with contextlib.suppress(ValueError):
-            envelope = json.loads(stdout or errors.decode("utf-8", errors="replace"))
+            envelope = parse_json(stdout or errors.decode("utf-8", errors="replace"))
         code = _refusal_code(envelope)
         if code is not None:
             msg = f"{Path(argv[0]).name}: {code} (exit {returncode})"
             raise CollectiveError(msg)
-        msg = f"{Path(argv[0]).name}: command_failed (exit {returncode}); outcome unknown"
+        msg = f"{Path(argv[0]).name}: command_failed (exit {returncode})"
         raise TransportUncertain(msg)
     if not as_json:
         return stdout
     try:
-        value = json.loads(stdout)
+        value = parse_json(stdout)
     except ValueError as exc:
         # The process ran and exited 0, so any write it carried may already have happened: UNKNOWN, not refused.
         msg = "Tool returned non-JSON data"
@@ -572,7 +598,7 @@ def _parse_tool_result(
         if _refusal_code(value) is not None:
             msg = "Daemon refused request"
             raise CollectiveError(msg)
-        msg = "Daemon error did not confirm refusal; outcome unknown"
+        msg = "Daemon returned an error"
         raise TransportUncertain(msg)
     return value.get("result", value) if isinstance(value, dict) else value
 
@@ -628,10 +654,10 @@ class Backend:
                     raise
                 returncode = proc.returncode
         except subprocess.TimeoutExpired as exc:
-            msg = "Command timed out; outcome unknown"
+            msg = "Command timed out"
             raise TransportUncertain(msg) from exc
         except OSError as exc:
-            msg = f"Command I/O failed after start: {Path(argv[0]).name}; outcome unknown"
+            msg = f"Command I/O failed after start: {Path(argv[0]).name}"
             raise TransportUncertain(msg) from exc
         return _parse_tool_result(argv, returncode, output, errors, as_json=as_json)
 
@@ -727,6 +753,9 @@ class Backend:
         request_id = "collective-" + str(uuid.uuid4())
         request = {"id": request_id, "method": method, "params": params}
         try:
+            metadata = os.lstat(self.native_socket)
+            if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+                raise CollectiveError("Herdr socket must be private and owned by the current user")
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
                 deadline = time.monotonic() + self.timeout
                 s.settimeout(self.timeout)
@@ -734,7 +763,7 @@ class Backend:
                 _check_native_peer(s)
                 s.sendall((canonical(request) + "\n").encode())
                 response = _recv_frame(s, deadline)
-            value = json.loads(response.split(b"\n", 1)[0])
+            value = parse_json(response.split(b"\n", 1)[0])
         except (OSError, ValueError) as exc:
             msg = "Herdr Unix socket unavailable or incompatible"
             raise CollectiveError(msg) from exc
@@ -863,7 +892,7 @@ def write_private_json(path: str | os.PathLike[str], value: object, *, exclusive
     """Write JSON to a private (0600, single-link, non-symlink) file, validating the inode before truncation."""
     path = Path(path)
     private_dir(path.parent)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if exclusive else 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_EXCL if exclusive else 0)
     fd = os.open(path, flags, PRIVATE_FILE_MODE)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         if not _is_private_regular(os.fstat(f.fileno())):
@@ -877,19 +906,13 @@ def write_private_json(path: str | os.PathLike[str], value: object, *, exclusive
 
 
 def read_private_json(path: str | os.PathLike[str]) -> Any:  # noqa: ANN401 - arbitrary JSON, validated by callers
-    """Read JSON from an owned 0600 regular file of at most 64 KiB, without following symlinks."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, encoding="utf-8") as f:
-        st = os.fstat(f.fileno())
-        if (
-            not stat.S_ISREG(st.st_mode)
-            or st.st_uid != os.getuid()
-            or stat.S_IMODE(st.st_mode) != PRIVATE_FILE_MODE
-            or st.st_size > MAX_PLAN_BYTES
-        ):
-            msg = "Plan must be an owned mode-0600 regular file, at most 64 KiB"
-            raise CollectiveError(msg)
-        return json.load(f)
+    """Read bounded private single-link JSON through the shared opened-inode policy."""
+    try:
+        return _private_files.read_private_json(path, limit=MAX_PLAN_BYTES)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise
+    except ValueError as exc:
+        raise CollectiveError(f"Unsafe private JSON input: {exc}") from exc
 
 
 def observe(backend: BackendLike, session: str) -> JsonDict:
@@ -1067,8 +1090,8 @@ def parser() -> argparse.ArgumentParser:
 
 def _plan_command(args: argparse.Namespace, backend: Backend) -> JsonDict:
     if args.command == "mail-plan":
-        with Path(args.text_file).open(encoding="utf-8") as f:
-            text = f.read(MAX_BODY + 1)
+        raw = read_owned_bytes(args.text_file, limit=2 * MAX_BODY).decode("utf-8")
+        text = raw.replace("\r\n", "\n").replace("\r", "\n")
         plan = make_mail_plan(
             backend.snapshot(args.session),
             args.session,

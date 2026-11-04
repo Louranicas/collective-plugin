@@ -9,6 +9,7 @@ This does not register or enable the Herdr/tuios plugin.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -19,6 +20,10 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 ROOT = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("collective_core", ROOT / "collective.py")
@@ -28,6 +33,8 @@ _core = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_core)
 CollectiveError, private_dir = _core.CollectiveError, _core.private_dir
 read_private_json, write_private_json = _core.read_private_json, _core.write_private_json
+read_owned_bytes = _core.read_owned_bytes
+locked_private_file = _core.locked_private_file
 MAX_UNIT_BYTES = 65536
 SERVICE = "collective-heartbeat.service"
 TIMER = "collective-heartbeat.timer"
@@ -138,23 +145,12 @@ def unit_originals(destination: Path) -> dict[str, bytes | None]:
     for name in (SERVICE, TIMER):
         path = destination / name
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            data = read_owned_bytes(path, limit=MAX_UNIT_BYTES)
         except FileNotFoundError:
             originals[name] = None
             continue
-        except OSError as exc:
-            raise CollectiveError("Refusing inaccessible or symlink user unit") from exc
-        with os.fdopen(fd, "rb") as stream:
-            metadata = os.fstat(stream.fileno())
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_uid != os.getuid()
-                or metadata.st_nlink != 1
-                or metadata.st_size > MAX_UNIT_BYTES
-                or metadata.st_mode & 0o022
-            ):
-                raise CollectiveError("Refusing unsafe existing user unit")
-            data = stream.read(MAX_UNIT_BYTES + 1)
+        except (OSError, ValueError) as exc:
+            raise CollectiveError("Refusing unsafe or inaccessible user unit") from exc
         if not data.startswith(b"# Managed by local.collective;") and hashlib.sha256(data).hexdigest() != HANDOFF[name]:
             raise CollectiveError("Existing unit differs from the frozen handoff; review it before adoption")
         originals[name] = data
@@ -205,7 +201,26 @@ def accepted_receipt(path: Path) -> dict[str, str] | None:
     return {str(k): v for k, v in prior.items() if isinstance(v, str)}
 
 
+@contextlib.contextmanager
+def installation_lock() -> Iterator[None]:
+    """Hold the one nonblocking lock every user-systemd installer keeps for its whole transaction.
+
+    Both installers share it, so neither can observe or roll back the other's
+    in-flight daemon-reload or unit state. Rollback is exception recovery only:
+    it gives no atomicity across power loss or SIGKILL.
+    """
+    state = private_dir(Path.home() / ".local/state/collective-plugin")
+    with locked_private_file(state / "scheduler-install.lock", blocking=False):
+        yield
+
+
 def install() -> dict[str, str]:
+    """Serialize the complete scheduler transaction, including all rollback and receipt work."""
+    with installation_lock():
+        return _install()
+
+
+def _install() -> dict[str, str]:
     """Back up and verify one scheduler, restoring files on setup failure."""
     destination = Path.home() / ".config/systemd/user"
     originals = unit_originals(destination)

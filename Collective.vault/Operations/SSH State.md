@@ -17,7 +17,7 @@ flowchart LR
     subgraph Desktop["<desktop-host> <desktop-tailnet-ip> / <desktop-lan-ip>"]
         KC["kinoite-codex<br/>(desktop SSH owner)"]
         SN["sshd-native-recovery<br/>:22 LAN + loopback · active"]
-        RT["relay-machine-tunnel/connector<br/>auto-restart ~8.7k ×"]
+        RT["relay-machine-tunnel/connector<br/>DISABLED by Luke 2026-11-05"]
     end
 
     subgraph Laptop["<laptop-host> <laptop-tailnet-ip> / <laptop-lan-ip>"]
@@ -39,7 +39,11 @@ flowchart LR
 |---|---|---|
 | Tailscale SSH desktop→laptop | PASS 2026-10-25 | Laptop offline since 06:00Z |
 | Native LAN, both ways | PASS 2026-10-25 (historical) | Desktop listener active; laptop untestable |
-| Offsite relay | Design deployed; public path times out | Units restart-looping (alert in the heartbeat) |
+| Offsite relay | Design deployed; public path times out | **Disabled** by Luke on 2026-11-05 after about 9,050 restarts; re-enable only after the path is repaired |
 | tuios host link | Not configured | Proposed, mail-only, needs Luke + both SSH owners |
 
 The **SSH team protocol** (CLAUDE.local.md and SSH.vault) governs. This vault only reports SSH state. The D3 relay stop is authorised but awaits Luke's `sudo`; D4 is done in metadata only. See [[Operations/Open Decisions]].
+
+## Relay stop: 2026-11-05 (dated)
+
+Luke ran `sudo systemctl disable --now ssh-independent-relay-machine-tunnel.service ssh-independent-relay-machine-connector.service`. Claude and Codex 2 verified both units disabled and inactive. `sshd-native-recovery.service` is still enabled and active, listening on the LAN and loopback :22, and Tailscale is up. Codex 3 recorded the change in SSH.vault (backup `~/.local/state/ssh-hardening/backups/collective-relay-stop-20261104T175444Z`). Undo: `sudo systemctl enable --now` on both units. Offsite and interstate recovery remain unqualified.

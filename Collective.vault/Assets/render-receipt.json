@@ -64,23 +64,37 @@
   },
   {
     "source": "Operations/SSH State.md",
-    "source_sha256": "bea906d2754cda6b7fad3fe0af8a0852b78e79560b61027d1269125cd6299224",
+    "source_sha256": "6e63fd0e1a8621d72a2dcff6792848c6aad2aa7c4d9fb116c3aed72d00f4a7ee",
     "diagram": 1,
     "svg": "Assets/ssh-state-1.svg",
-    "sha256": "009ae039e3a4defc4946ea5d1c42f31c463358c9c14fe6dd235da00c4eb3235a"
+    "sha256": "06b5c39d55e132548bc82724bd3956991cb9331d005b73a412c4ddcf59686d72"
   },
   {
     "source": "Operations/Scheduler Runbook.md",
-    "source_sha256": "588f6127d86f7d3f096ad59a880c0c3576e2f867be838b30a5810977400c840a",
+    "source_sha256": "8cc1eb6e5569f9ff997cb703d70522c5d83e3dbacd51aef1732c1d31e908607e",
     "diagram": 1,
     "svg": "Assets/scheduler-runbook-1.svg",
+    "sha256": "6f2a3c442a814d7a9cb2170faf09ce4a7d34c00429f7274c6ac6ba31212edcbe"
+  },
+  {
+    "source": "Operations/Scheduler Runbook.md",
+    "source_sha256": "8cc1eb6e5569f9ff997cb703d70522c5d83e3dbacd51aef1732c1d31e908607e",
+    "diagram": 2,
+    "svg": "Assets/scheduler-runbook-2.svg",
     "sha256": "5a457ece9a0aa710f55e03556de3c0254831890939c825aa626c33d6b015aea8"
   },
   {
     "source": "Operations/Scheduler Runbook.md",
-    "source_sha256": "588f6127d86f7d3f096ad59a880c0c3576e2f867be838b30a5810977400c840a",
-    "diagram": 2,
-    "svg": "Assets/scheduler-runbook-2.svg",
+    "source_sha256": "8cc1eb6e5569f9ff997cb703d70522c5d83e3dbacd51aef1732c1d31e908607e",
+    "diagram": 3,
+    "svg": "Assets/scheduler-runbook-3.svg",
     "sha256": "26b89ee903fdc2df47d8889c3b00f9d8e1763c089faefcb9c41b880641f30329"
+  },
+  {
+    "source": "Operations/Scheduler Runbook.md",
+    "source_sha256": "8cc1eb6e5569f9ff997cb703d70522c5d83e3dbacd51aef1732c1d31e908607e",
+    "diagram": 4,
+    "svg": "Assets/scheduler-runbook-4.svg",
+    "sha256": "6a3a30542815bc8432831de17339b0b021e48d21d76bae2fe74bce5959e27baa"
   }
 ]

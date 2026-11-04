@@ -215,3 +215,57 @@ This is a dated code/runtime receipt, independent of later documentation edits. 
 - The named kernel refusal probe and static 0.6 exposure score in `proof/runtime-sandbox.json` apply to the unchanged sandbox template; this does not claim arbitrary exploit resistance or user-level IP firewall enforcement.
 
 The private raw routing and runtime receipts remain local. The main merges, GitLab pipeline and final documentation revision require their own recorded checks; no future success is assumed here.
+
+### Release and closure verification: 2026-11-05 (Claude, independent)
+
+| Check | Result |
+|---|---|
+| GitHub `main` | `f21a331`, a squash of PR #1. Its tree `fce44178` equals the reviewed `a697ab8`. The CI push run passed on 3.12/3.13/3.14 |
+| GitLab `main` | `f21a331`. MR !1 merged; the `main` pipeline passed on 3.12/3.13/3.14 |
+| Fresh clone of `main` | 9/9 gates PASS; 107 tests OK (one legitimate skip) |
+| `main` history | No pane UUIDs in any blob of `a5c2733..f21a331` |
+| Branches | Luke deleted `feat/collective-comms` (GitHub) and `release/collective-comms` (GitLab); both remotes are `main`-only |
+| Relay | Disabled and inactive after Luke's sudo; recovery sshd active (also verified by Codex 2, #442) |
+| Durable records | MemPalace `evt_20261104T175055_6e5da8819039` (Claude outcome) plus Codex 3's release-acceptance events and SSH.vault record (#447) |
+
+**Lesson:** the tuios `draft_held` false positive on an empty placeholder held both Codex panes' mail-wake queued for about 7 hours. A read-only screen check confirmed the input boxes were empty, and an `ask-agent` nudge (at Luke's request) woke both panes.
+
+### Reliability iteration test evidence (`feat/collective-reliability`, dated 2026-11-05)
+
+Each count belongs to one revision; none is a later revision's result.
+
+| Revision | Evidence | Status |
+|---|---|---|
+| `f21a331` (released `main`) | 107 test methods; 9/9 gates and 107 tests OK in a fresh clone (see above) | Historical release evidence |
+| `fe74d3e` (initial reliability candidate) | 201 test methods. The private generated QA sandbox recorded 199 tests and 11/11 gates passing before the final first-run-grace regressions were added | Historical candidate evidence; it included the later-removed daily quality job |
+| Review-fix revision after `2f555b6` | 212 test methods; `python3 -m unittest` over all five test modules ran 212 tests, OK, 1 skipped (`systemd-analyze` absent in the review sandbox) | Local review-phase measurement only. The pipeline's own gate run and the protected Python 3.12/3.13/3.14 CI are the authoritative results and are not recorded here in advance |
+
+The daily quality job, its offline gate-tool provisioning and its receipt consumer were removed in the review-fix revision, so no automatic quality evidence exists for any revision. Host status before acceptance (kept as history): on 2026-11-05 the heartbeat was paused for this iteration and the two job timers were not installed.
+
+## Candidate host acceptance (2026-11-04T20:59Z)
+
+Recorded after it happened. The candidate was `269ee7e` plus Codex 3's uncommitted strict tool-version and parser-documentation follow-up. The public `main` branches on both remotes still point at `f21a331`; publication follows the protected CI.
+
+| Check | Codex 3 host acceptance (20:59:27Z) | Claude independent re-check (21:01:11Z) |
+|---|---|---|
+| Gates and tests | 11/11 gates PASS on Python 3.14.8; full suite of 215 tests passing | 215 test methods (static count) |
+| Metadata job install | `install_coordination_jobs.py` reported `installed`; four generated units passed `systemd-analyze verify` | Installer receipt `installed` |
+| Timers | Exactly three enabled and active: heartbeat, collaboration, cohesion. The gateway installer resumed the heartbeat | Same three enabled and active. Each service `Result=success`, exit 0 |
+| Unit files | All six live unit files byte-match the generated units | All six byte-match the installers' current output |
+| Job receipts | Collaboration and cohesion `ok`, exact source hash | Both `ok`, fresh, source hash matches, no source or metric gaps, written after the confirmed install |
+| No automatic QA | Quality timer not found and inactive | Quality is unscheduled by contract: no unit file, not enabled, not active |
+| Gateway view | `coord_jobs` observed two `ok`, non-stale receipts; notice counts are metadata only | Board fresh; unknown-notice ledger empty; no legacy hold |
+| Effects | Runtime hashes unchanged; no model turns | Read-only collector; no units changed, no jobs run, no mail sent |
+
+**Meaning.** These are candidate observations at one point in time. They are not a guarantee of ongoing schedule health, and they do not prove that any agent work was accepted or completed. Ongoing health is the heartbeat's job (`jobs:<name>` alerts on failed, degraded, unknown or stale receipts).
+
+## Research and gate provenance (2026-11-05, zero-touch hive phase)
+
+Pointers only; no research corpus is copied into the vault. Library sources were treated as data.
+
+| Item | Durable record | Status |
+|---|---|---|
+| Claude X1 (library principles) and X1b (peer-reviewed findings) | MemPalace artifact `art_20261104T200737_fc181e3a418c`; `~/.local/state/collective-claude/research-20261105/` (with SHA-256 manifest) | Delivered. R57 MAST is peer-reviewed (NeurIPS 2025 Datasets and Benchmarks); R47 is a preprint, so its numbers are hypotheses |
+| Codex 2 research (library, zellij, papers) | `art_20261104T200618_3f7a2b2d3e2f`, `…_b0e79a38aa9c`, `…_71ee5b5f43e6`; `~/.local/state/collective-codex2/reliability-20261105/` | Delivered. 20 forked crash schedules passed, with at most 1 fake effect. No empirical claim that coherence improved |
+| R3 gates patch v6 | MemPalace artifact `art_20261104T200737_c1689c7e94ed`; patch sha256 `317e6e84…`, `tools/check.py` `8ec18b09…` | **Accepted** by Codex 2 (#598, #601). Waiting on Codex 3 to apply it after R1 and the jobs work |
+| Rhythms reporter v2 | Same state directory: `rhythms.py` and `fixtures_check.py` (12 checks) | **Not adopted.** Codex 3's jobs share its principles: descriptive only, no hard-coded roster (#601). They make no phase, balance or latency claims. The scheduler design is Codex 3's decision (#582, #621) |

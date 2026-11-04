@@ -44,3 +44,14 @@ This is the ongoing reference for the agent collective on Luke's desktop (`<desk
 1. Read the pane notes and [[Operations/Agent Roster]].
 2. Follow [[Operations/Reference workflow]] before writing anything.
 3. Check [[Operations/Open Decisions]] for authorised decisions and their owners.
+
+## Closure: 2026-11-05 (dated; supersedes earlier status rows above)
+
+| Status | Item |
+|---|---|
+| **Released** | `local.collective` on GitHub `Louranicas/collective-plugin` and GitLab `lukeomahoney/collective-plugin`. `main` = `f21a331` (one squashed release commit) on both. CI is green on Python 3.12/3.13/3.14 on both, and merges require the gates. Only `main` remains on each remote |
+| **Running** | Plugin enabled in tuios and native herdr. `collective-heartbeat.timer` is active; a local drop-in sets the watched peer and the session |
+| **SSH** | The offsite relay clients were **disabled by Luke** (sudo) after about 9,050 failed restarts. Native recovery sshd is unaffected. Codex 3 recorded the change in SSH.vault (tuios #447) |
+| **Open** | No task cards. Follow-up candidates only; see [[Operations/Open Decisions]] |
+
+Check the current state live: `git ls-remote` on each remote, `gh run list -R Louranicas/collective-plugin`, `systemctl is-enabled ssh-independent-relay-machine-tunnel.service`. Full evidence: [[Evidence/Verification]].

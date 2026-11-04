@@ -12,12 +12,19 @@ tags: [collective, operations]
 | Path | Owner | Mode | Contents | Lifetime |
 |---|---|---|---|---|
 | `~/tuios-setup/collective-plugin/` | Codex 3 (source), Codex 2 (tests), Claude (docs) | git; source on GitHub `feat/collective-comms` (PR #1, draft at the 2026-11-05 snapshot; GitLab main held only the bootstrap then; query remotes for current state) | Canonical plugin (registered in tuios and native herdr) | Canonical local checkout |
-| `~/.config/systemd/user/collective-heartbeat.{timer,service}` | Codex 3 | user units | The **one** scheduler | Disable to stop |
+| `~/.config/systemd/user/collective-heartbeat.{timer,service}` | Codex 3 | user units | The **one notification gateway** (formerly "the one scheduler") | Disable to stop |
+| `~/.config/systemd/user/collective-{collaboration,cohesion}.{timer,service}` | Codex 3 (`install_coordination_jobs.py`) | user units, marker-managed | Bounded metadata-only jobs: no notices, mail, wakes, tests or model turns. Installed in the candidate host acceptance on 2026-11-04T20:59Z (2026-11-05 local) (before that: proposed, not installed) | Disable the two timers to stop |
+| `~/.local/state/collective/coordination/<job>.json` | `coordination_jobs.py` | 0600 in a 0700 dir | Schema-1 job receipt: status, source and metric gaps, metrics, `source_sha256`. Metadata only | Rewritten each run |
+| `~/.local/state/collective/coordination/<job>.lock` | jobs | 0600, one link | Exclusive non-blocking per-job locks | Persist |
+| `~/.local/state/collective/coordination/installer.json` and `installer-backups/<UTC>-<id>/` | `install_coordination_jobs.py` | 0600 | `installing` → `installed` or `rolled-back`; prior managed units and staged units | Keep |
+| `~/.local/state/collective/coordination/quality*` (pre-release trial only) | removed quality job | 0700/0600 | Historical validation evidence, not job health; no current code reads or writes it | Owner may archive |
 | `~/.local/state/collective/heartbeat.json` | heartbeat | 0600 in a 0700 dir | Board: agents, herdr counts, relay, peers, alerts, flex | Rewritten each full sweep |
-| `~/.local/state/collective/memory.json` | heartbeat | 0600 | Dedup keys, pending one-shot alerts, unread/needs ages, ring boot and evicted count, `last_full`, mode | Persists |
+| `~/.local/state/collective/memory.legacy-hold-<UTC>.json` | `heartbeat.py --release-legacy-notice-hold` | 0600 | Prior memory saved before an operator clears a legacy notice hold | Keep as evidence |
+| `~/.local/state/collective/memory.json` | heartbeat | 0600 | Notice journal (`notices`: at most 128 metadata records, intent/submitted/refused/unknown with held keys; never message bodies), dedup keys, unread/needs ages, ring boot and evicted count, `last_full`, mode | Persists |
 | `~/.local/state/collective-plugin/mail-journal.jsonl` | `collective.py` | 0600, one link | intent/submitted/refused/unknown; hashes only | Grows (rotate later) |
 | `~/.local/state/collective-plugin/plans/` | senders | 0600 plans in 0700 dirs | Plans **include the body**; deleted after apply by default | Until applied |
 | `~/.local/state/collective-plugin/scheduler-backups/` | `install_monitor.py` | 0600 files in 0700 dirs | Per-attempt unit backups and staged units | Keep |
+| `~/.local/state/collective-plugin/scheduler-install.lock` | both installers | 0600, one link | The one nonblocking lock held for each whole install transaction | Persist |
 | `~/.local/state/collective-plugin/scheduler-install-receipt.json` | `install_monitor.py` | 0600 | Install receipt: `installing`, `installed` or `rolled-back`, with `previous` = last accepted install | Rewritten per install |
 | tuios mail ring | tuios daemon | memory | Messages and threads | **Lost on daemon restart** |
 | tuios task cards and pane notes | tuios daemon | session | Intake, claims, `DOING\|NEXT\|BLOCKED` | Survive restart |
