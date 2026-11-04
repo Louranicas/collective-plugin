@@ -535,7 +535,7 @@ def _parse_tool_result(
         if code is not None:
             msg = f"{Path(argv[0]).name}: {code} (exit {returncode})"
             raise CollectiveError(msg)
-        msg = f"{Path(argv[0]).name}: command_failed (exit {returncode}); submission outcome unknown"
+        msg = f"{Path(argv[0]).name}: command_failed (exit {returncode}); outcome unknown"
         raise TransportUncertain(msg)
     if not as_json:
         return stdout
@@ -549,7 +549,7 @@ def _parse_tool_result(
         if _refusal_code(value) is not None:
             msg = "Daemon refused request"
             raise CollectiveError(msg)
-        msg = "Daemon error did not confirm refusal; submission outcome unknown"
+        msg = "Daemon error did not confirm refusal; outcome unknown"
         raise TransportUncertain(msg)
     return value.get("result", value) if isinstance(value, dict) else value
 
