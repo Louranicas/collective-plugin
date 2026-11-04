@@ -26,6 +26,7 @@ import struct
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Protocol, cast
@@ -88,8 +89,6 @@ RING_LIMIT = 100
 MAIL_IDS_KEPT = 512
 WATCH_SECONDS = 10
 PRIVATE_FILE_MODE = 0o600
-FIRST_PRINTABLE = 32
-DELETE_CHAR = 127
 COLLABORATION_KINDS = ("intent", "milestone", "blocker", "handoff", "review")
 PLAN_KEYS = {
     "schema",
@@ -105,7 +104,6 @@ PLAN_KEYS = {
     "digest",
 }
 PAYLOAD_KEYS = {"session", "from", "to", "subject", "text", "reply_to"}
-HIDDEN_RANGES = ((0x200B, 0x200F), (0x202A, 0x202E), (0x2066, 0x2069), (0xFEFF, 0xFEFF))
 
 
 class CollectiveError(Exception):
@@ -136,10 +134,9 @@ def pane_uuid(value: object) -> str:
 
 
 def _is_refused_char(c: str, *, multiline: bool) -> bool:
-    n = ord(c)
-    if n < FIRST_PRINTABLE and (not multiline or c not in "\n\t"):
-        return True
-    return n == DELETE_CHAR or any(low <= n <= high for low, high in HIDDEN_RANGES)
+    if multiline and c in "\n\t":
+        return False
+    return unicodedata.category(c) in {"Cc", "Cf"}
 
 
 def plain_text(value: object, limit: int, *, multiline: bool = True) -> str:
@@ -399,12 +396,13 @@ class Journal:
                 msg = "Plan already consumed; never automatically resend"
                 raise CollectiveError(msg)
             p = plan["payload"]
+            now = time.time()
             recent = [
                 r
                 for r in rows
                 if r.get("outcome") == "intent"
                 and r.get("sender") == p["from"]
-                and r.get("time", 0) > time.time() - RATE_WINDOW_SECONDS
+                and r.get("time", 0) > now - RATE_WINDOW_SECONDS
             ]
             if len(recent) >= RATE_LIMIT:
                 msg = "Local rate limit: at most ten mail intents per sender per minute"
@@ -412,7 +410,7 @@ class Journal:
             f.write(
                 canonical(
                     {
-                        "time": int(time.time()),
+                        "time": now,
                         "outcome": "intent",
                         "digest": plan["digest"],
                         "request_id": plan["request_id"],
@@ -435,8 +433,8 @@ class Journal:
 def _require_confirmed_receipt(result: object) -> JsonDict:
     if (
         not isinstance(result, dict)
-        or result.get("success") is False
-        or result.get("error")
+        or ("success" in result and result["success"] is not True)
+        or result.get("error") is not None
         or type(result.get("message_id")) is not int
         or result["message_id"] <= 0
     ):
@@ -594,12 +592,14 @@ def _parse_tool_result(
         # The process ran and exited 0, so any write it carried may already have happened: UNKNOWN, not refused.
         msg = "Tool returned non-JSON data"
         raise TransportUncertain(msg) from exc
-    if isinstance(value, dict) and value.get("error"):
+    if isinstance(value, dict) and value.get("error") is not None:
         if _refusal_code(value) is not None:
             msg = "Daemon refused request"
             raise CollectiveError(msg)
         msg = "Daemon returned an error"
         raise TransportUncertain(msg)
+    if isinstance(value, dict) and "success" in value and value["success"] is not True:
+        raise TransportUncertain("Tool did not confirm success")
     return value.get("result", value) if isinstance(value, dict) else value
 
 
@@ -966,6 +966,10 @@ def _mail_status(
 
 def monitor(backend: BackendLike, session: str, directory: str | os.PathLike[str], *, notify: bool = False) -> JsonDict:
     """One passive sweep. No mail sends, read receipts, model turns or replies."""
+    if not Path(directory).is_absolute():
+        # A relative path resolves against the caller's cwd and can plant private state in a checkout.
+        msg = "Explicit absolute state directory required"
+        raise CollectiveError(msg)
     directory = private_dir(directory)
     lock = directory / "monitor.lock"
     with locked_private_file(lock, blocking=False):
@@ -1010,7 +1014,10 @@ CAPABILITIES = {
         "local SSH unit/peer state",
         "optional native Herdr roster",
     ],
-    "write": ["local tuios mail only: exact private plan + digest + expiry + one-use journal"],
+    "write": [
+        "local tuios mail: exact private plan + digest + expiry + one-use journal",
+        "optional local desktop notification: monitor --notify, count only",
+    ],
     "collaboration": [
         "Structured intent/milestone/blocker/handoff/review plans with owner, reviewer, scope, evidence and DoD",
     ],
@@ -1142,7 +1149,7 @@ def _dashboard(args: argparse.Namespace, backend: Backend) -> JsonDict | None:
         if sys.stdout.isatty():
             print("\033[2J\033[H", end="")
         print("Collective — passive local status | q / Ctrl+C to close")
-        print(clean(json.dumps(result, indent=2, ensure_ascii=True)))
+        print(clean(json.dumps(result, indent=2, ensure_ascii=True)), flush=True)
         if sys.stdin.isatty() and select.select([sys.stdin], [], [], WATCH_SECONDS)[0]:
             if sys.stdin.readline().strip().lower() == "q":
                 return None

@@ -291,8 +291,6 @@ def load[T](name: str, default: T) -> T:
         return cast("T", _private_files.read_private_json(STATE / name, limit=MAX_BYTES))
     except FileNotFoundError:
         return default
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return default
 
 
 def save(name: str, obj: object) -> None:
@@ -831,7 +829,7 @@ def notice_result(rc: int, output: str) -> tuple[str, int | None]:
     }
     if isinstance(code, str) and code in refused:
         return "refused", None
-    if rc or error or value.get("success") is False:
+    if rc or error is not None or ("success" in value and value["success"] is not True):
         return "unknown", None
     message_id = value.get("message_id")
     if type(message_id) is int and message_id > 0:

@@ -20,7 +20,7 @@ tags: [collective, operations]
 | `~/.local/state/collective/coordination/quality*` (pre-release trial only) | removed quality job | 0700/0600 | Historical validation evidence, not job health; no current code reads or writes it | Owner may archive |
 | `~/.local/state/collective/heartbeat.json` | heartbeat | 0600 in a 0700 dir | Board: agents, herdr counts, relay, peers, alerts, flex | Rewritten each full sweep |
 | `~/.local/state/collective/memory.legacy-hold-<UTC>.json` | `heartbeat.py --release-legacy-notice-hold` | 0600 | Prior memory saved before an operator clears a legacy notice hold | Keep as evidence |
-| `~/.local/state/collective/memory.json` | heartbeat | 0600 | Notice journal (`notices`: at most 128 metadata records, intent/submitted/refused/unknown with held keys; never message bodies), dedup keys, unread/needs ages, ring boot and evicted count, `last_full`, mode | Persists |
+| `~/.local/state/collective/memory.json` | heartbeat | 0600 | Notice journal (`notices`: at most 128 metadata records, intent/submitted/refused/unknown with held keys; never message bodies), dedup keys, unread/needs ages, ring boot and evicted count, `last_full`, mode. Missing means first run; malformed means the heartbeat halts and the file is preserved, never auto-reset | Persists |
 | `~/.local/state/collective-plugin/mail-journal.jsonl` | `collective.py` | 0600, one link | intent/submitted/refused/unknown; hashes only | Grows (rotate later) |
 | `~/.local/state/collective-plugin/plans/` | senders | 0600 plans in 0700 dirs | Plans **include the body**; deleted after apply by default | Until applied |
 | `~/.local/state/collective-plugin/scheduler-backups/` | `install_monitor.py` | 0600 files in 0700 dirs | Per-attempt unit backups and staged units | Keep |

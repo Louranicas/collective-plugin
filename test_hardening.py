@@ -903,7 +903,9 @@ class HeartbeatTests(unittest.TestCase):
             path = Path(tmp) / "memory.json"
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             path.write_text("bad-json", encoding="utf-8")
-            self.assertEqual(heartbeat.load("memory.json", {"fallback": True}), {"fallback": True})
+            with self.assertRaises(json.JSONDecodeError):
+                heartbeat.load("memory.json", {"fallback": True})
+            self.assertEqual(path.read_text(encoding="utf-8"), "bad-json")
 
     def test_hanging_tools_are_bounded_by_the_sweep_deadline(self) -> None:
         service = installer.units()[installer.SERVICE]
@@ -1084,6 +1086,67 @@ class HeartbeatLifecycle(unittest.TestCase):
             return self.ring_rc, json.dumps(self.ring)
 
         self.stack.enter_context(mock.patch.object(heartbeat, "run", side_effect=transport))
+
+    def test_corrupt_existing_notice_memory_refuses_before_reads_or_effects(self) -> None:
+        # A lost response can follow successful delivery. Keep its unknown hold
+        # across restarts; corrupt bytes must never turn that state into first-run
+        # defaults and permit a fresh dispatch of the same active condition.
+        self.agents.return_value = None
+        self.send.return_value = (124, "")
+        self.assertEqual(heartbeat.main(), 0)
+        persisted: dict[str, Any] = heartbeat.load("memory.json", {})
+        self.assertEqual(persisted["notices"][0]["status"], "unknown")
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(heartbeat.main(), 0)
+        self.assertEqual(self.send.call_count, 1)
+        path = self.state / "memory.json"
+        for data in (b"{broken", b"\xff", b""):
+            for options in ([], ["--dry-run"], ["--release-legacy-notice-hold"]):
+                with self.subTest(data=data, options=options):
+                    path.write_bytes(data)
+                    self.send.reset_mock()
+                    for reader in (self.agents, self.native, self.relay, self.peers):
+                        reader.reset_mock()
+                    with (
+                        mock.patch.object(sys, "argv", ["heartbeat.py", "--full", *options]),
+                        self.assertRaises(ValueError),
+                    ):
+                        heartbeat.main()
+                    self.assertEqual(path.read_bytes(), data)
+                    self.send.assert_not_called()
+                    for reader in (self.agents, self.native, self.relay, self.peers):
+                        reader.assert_not_called()
+
+    def test_notice_receipt_envelope_requires_literal_success_and_no_error(self) -> None:
+        success_values: list[Any] = [False, None, 0, 1, "true", [], {}]
+        error_values: list[Any] = [{}, [], False, "", 0]
+        ambiguous = [{"message_id": 42, "success": value} for value in success_values] + [
+            {"message_id": 42, "error": value} for value in error_values
+        ]
+        accepted = [
+            {"message_id": 42},
+            {"message_id": 42, "success": True},
+            {"message_id": 42, "success": True, "error": None},
+        ]
+        self.agents.return_value = None
+        cases = [(receipt, "unknown") for receipt in ambiguous] + [(receipt, "submitted") for receipt in accepted]
+        for receipt, expected in cases:
+            with (
+                self.subTest(receipt=receipt),
+                tempfile.TemporaryDirectory() as tmp,
+                mock.patch.object(heartbeat, "STATE", Path(tmp)),
+            ):
+                self.send.reset_mock()
+                self.send.return_value = (0, json.dumps(receipt))
+                self.assertEqual(heartbeat.main(), 0)
+                memory: dict[str, Any] = heartbeat.load("memory.json", {})
+                notice = memory["notices"][-1]
+                self.assertEqual(notice["status"], expected)
+                self.assertEqual(notice["message_id"], 42 if expected == "submitted" else None)
+                self.assertEqual(notice["held_keys"], ["tuios-read"] if expected == "unknown" else [])
+                self.assertEqual("tuios-read" in memory["sent"], expected == "submitted")
+                self.assertEqual(heartbeat.main(), 0)
+                self.assertEqual(self.send.call_count, 1)
 
     def test_full_sweeps_age_alert_once_resolve_and_recur(self) -> None:
         self.agents.return_value = [{"window_id": "pane", "unread": 3, "needs_you": True, "harness_id": "fixture"}]
