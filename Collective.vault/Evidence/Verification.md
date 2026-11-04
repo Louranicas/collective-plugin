@@ -10,7 +10,7 @@ tags: [collective, evidence]
 
 # Verification
 
-## Receipt 2026-11-04 (Claude, independent verifier)
+## Receipt 2026-11-04 (Claude, independent verifier; historical, superseded by the current acceptance receipt below)
 
 **Subject:** the frozen working tree `~/tuios-setup/collective-plugin/`, uncommitted. sha256 prefixes:
 
@@ -170,4 +170,4 @@ This is the current local proof that README and Home point to. The 82- and 83-te
 | Tests | **98 OK**: 36 in `test_collective.py`, 62 in `test_hardening.py` (`coverage run -m unittest discover -s . -p 'test_*.py'`) |
 | Branch coverage (`coverage==7.17.1`, `branch = true`) | **94%** aggregate: `collective.py` 93%, `heartbeat.py` 94%, `install_monitor.py` 95%. Every production module is above the 90% floor |
 
-**Limitations:** this is a local run. The tool environment was redirected to temporary uv cache and tool directories, because the sandbox mounts the user's uv directories read-only; the pinned tool versions were unchanged. The planted-red mutation count was not re-run for this receipt beyond what the gates themselves execute. Remote CI results are recorded by the pipeline, not here. History is not scrubbed: identifiers from before the redaction remain in `be90af1`.
+**Limitations:** this is a local run. The source is not yet pushed to either public repo (only an empty bootstrap is), and the heartbeat timer is paused during hardening. The tool environment was redirected to temporary uv cache and tool directories, because the sandbox mounts the user's uv directories read-only; the pinned tool versions were unchanged. The planted-red mutation count was not re-run for this receipt beyond what the gates themselves execute. Remote CI results are recorded by the pipeline, not here. History is not scrubbed: identifiers from before the redaction remain in `be90af1`.

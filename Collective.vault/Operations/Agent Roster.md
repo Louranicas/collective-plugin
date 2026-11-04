@@ -19,7 +19,7 @@ Names are **routing claims**, not authenticated identities. Always address an ag
 | `<codex2-pane>` | Codex 2 | Tests and compiled report; interface and identity verification | `test_collective.py`; MemPalace combined reports |
 | `<codex3-pane>` | Codex 3 | Coordinator; source and scheduler owner; herdr bridge | `collective.py`, `heartbeat.py`, `install_monitor.py`, `herdr-plugin.toml`, the timer units |
 
-Codex 2 and Codex 3 **both** use the shared name `kinoite-codex`. Tell them apart by pane (see [[Operations/Open Decisions]]).
+Under D4, Codex 3 keeps `kinoite-codex` as the sole desktop SSH writer; Codex 2 and Claude carry the aliases `collective-codex2` and `collective-claude` in coordination metadata. Aliases are routing claims only and do not fix shared-name watcher suppression, so tell agents apart by pane (see [[Operations/Open Decisions]]).
 
 ## Other Claude sessions (reached by Claude cross-session messaging)
 

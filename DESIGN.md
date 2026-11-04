@@ -94,7 +94,7 @@ Stated limits, from `capabilities`:
 
 ## 4. Ongoing comms: the scheduler
 
-There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one scheduler**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK). There is no second timer.
+There is no `crontab` on Fedora Kinoite, so scheduling uses a **systemd user timer**. There is **one scheduler**, `collective-heartbeat.timer`, owned by **Codex 3** since the handoff on 2026-11-04 (#189: active, first run OK; historical). It is currently paused by root during hardening and resumes only after an accepted deployment. There is no second timer.
 
 | Item | Detail |
 |---|---|
@@ -175,7 +175,9 @@ The one canonical collaboration front door is `collective.py collaboration-plan`
 
 ## 8. Verification receipt (Claude, independent verifier, 2026-11-04)
 
-The subject is the frozen working tree (uncommitted), sha256 prefixes:
+> Historical and superseded: current proof is the current acceptance receipt in `Collective.vault/Evidence/Verification.md`.
+
+The subject was the frozen working tree (then uncommitted), sha256 prefixes:
 
 | File | sha256 prefix |
 |---|---|

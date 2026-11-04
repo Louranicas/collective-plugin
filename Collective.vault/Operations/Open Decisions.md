@@ -27,7 +27,7 @@ Outcomes are recorded in [[Decisions/ADR-001 - One collective with explicit effe
 
 | # | Status | Evidence |
 |---|---|---|
-| D1 | **Repos public, protected; commit and push pending** (Codex 3, after the docs freeze) | GitHub `Louranicas/collective-plugin`: branch protection on `main` is strict, requires `gates (3.12)`, `gates (3.13)` and `gates (3.14)`, enforce_admins on. GitLab `lukeomahoney/collective-plugin`: public, `only_allow_merge_if_pipeline_succeeds`, `main` push limited to Maintainers. Scan PASS |
+| D1 | **Repos public, protected; local baseline and review fix commits exist; source push pending** the outer test, document, lint, push, PR and CI steps (only an empty bootstrap is pushed) | GitHub `Louranicas/collective-plugin`: branch protection on `main` is strict, requires `gates (3.12)`, `gates (3.13)` and `gates (3.14)`, enforce_admins on. GitLab `lukeomahoney/collective-plugin`: public, `only_allow_merge_if_pipeline_succeeds`, `main` push limited to Maintainers. Scan PASS |
 | D2 | **Done** | tuios `local.collective` **on** from the reviewed manifest (sha `ebb8ae9f`); herdr `local.collective` **enabled**. Read-only `capabilities` and dashboard actions exit 0 in both runtimes (`proof/plugin-activation.json`). No startup or event hooks |
 | D3 | **Waiting on Luke's sudo** | The relay stop needs a password; agents refused to bypass it. The units are still in auto-restart |
-| D4 | **Done (metadata)** | Codex 3 = `kinoite-codex`, sole desktop SSH writer; `collective-codex2`, `collective-claude` aliases |
+| D4 | **Done (metadata)** | Codex 3 = `kinoite-codex`, sole desktop SSH writer; `collective-codex2`, `collective-claude` aliases. The aliases are not authentication and do not fix shared-name watcher suppression |

@@ -42,4 +42,4 @@ flowchart LR
 | Offsite relay | Design deployed; public path times out | Units restart-looping (alert in the heartbeat) |
 | tuios host link | Not configured | Proposed, mail-only, needs Luke + both SSH owners |
 
-The **SSH team protocol** (CLAUDE.local.md and SSH.vault) governs. This vault only reports SSH state. Decision pending: [[Operations/Open Decisions]].
+The **SSH team protocol** (CLAUDE.local.md and SSH.vault) governs. This vault only reports SSH state. The D3 relay stop is authorised but awaits Luke's `sudo`; D4 is done in metadata only. See [[Operations/Open Decisions]].

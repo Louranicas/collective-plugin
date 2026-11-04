@@ -1,6 +1,6 @@
 ---
 type: deployment-and-recovery-schematic
-status: timer-running-plugin-unregistered
+status: timer-paused-plugin-registered
 created: 2026-11-04
 verified: 2026-11-04
 owner: Codex 2
@@ -47,7 +47,7 @@ flowchart TB
 | Cadence | Two-minute timer tick with bounded random delay; full checks on active ticks, every fifteen minutes when quiet |
 | State | `~/.local/state/collective/`: private board, incident/dedup memory and lock |
 | Install receipt and backups | `~/.local/state/collective-plugin/scheduler-install-receipt.json` and `scheduler-backups/` |
-| Activation boundary | One user timer is active; the Herdr/TUIOS plugin is not registered or enabled |
+| Activation boundary | One user timer, installed and enabled, but paused by root (stopped) during the hardening pipeline; it resumes only after an accepted deployment. Check with `systemctl --user is-active collective-heartbeat.timer`. The plugin is enabled in tuios and native herdr for read-only actions (`proof/plugin-activation.json`) |
 
 The systemd user manager's availability governs this timer. It is not proof of operation before login, after reboot, after encrypted-storage lock or while the machine is powered off. No new linger or boot-unlock behaviour was configured.
 
