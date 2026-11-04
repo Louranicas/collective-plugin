@@ -147,3 +147,27 @@ The low private-directory finding above is corrected: existing private proof/bac
 The public source candidate still requires the independent no-mistakes pipeline and remote CI; local green checks are not a claim that remote validation has run.
 
 Publication redaction (2026-11-04): pane UUIDs, host names, the local user name, absolute home paths, session and MemPalace identifiers were replaced with placeholders across the vault, docs and proof. `ssh-state-1.svg` was re-rendered from the redacted `Operations/SSH State.md` with `tuios mermaid "Operations/SSH State.md" --diagram 1`, and `Assets/render-receipt.json` binds that output. Re-running `tuios mermaid <source> --diagram <n>` for all 12 receipt rows reproduces every recorded SVG sha256 byte for byte. Redacted fields appear as labelled placeholders (for example `<laptop-host>`), not as substituted identifiers; the private original receipts are kept locally and are not published. The redaction commit does not rewrite earlier commits, so identifiers from before the redaction remain in this branch's history (`be90af1`) until that history is rewritten or left unpublished.
+
+### Current acceptance receipt, 2026-11-04 (supersedes the 82- and 83-test counts above)
+
+This is the current local proof that README and Home point to. The 82- and 83-test entries above are dated history. This receipt binds to the source files below; any later edit to them invalidates it until the gate is re-run.
+
+**Subject:** file sha256 prefixes (16 hex):
+
+| File | sha256 |
+|---|---|
+| `collective.py` | `960760aea9ff6334` |
+| `heartbeat.py` | `34582f51fd957364` |
+| `install_monitor.py` | `d4c1a9d8a595e818` |
+| `test_collective.py` | `d983994f52b30d04` |
+| `test_hardening.py` | `63210472708fe19f` |
+| `tools/check.py` | `22d4b4f3ff3dc9c5` |
+| `pyproject.toml` | `905c194eaf63ce7c` |
+
+| Gate | Result |
+|---|---|
+| selftest · hygiene · fitness · format · lint · types · security · tests · coverage | **ALL GATES PASS**: all 9 (`python3 -I tools/check.py --keep-going`, exit 0) |
+| Tests | **98 OK**: 36 in `test_collective.py`, 62 in `test_hardening.py` (`coverage run -m unittest discover -s . -p 'test_*.py'`) |
+| Branch coverage (`coverage==7.17.1`, `branch = true`) | **94%** aggregate: `collective.py` 93%, `heartbeat.py` 94%, `install_monitor.py` 95%. Every production module is above the 90% floor |
+
+**Limitations:** this is a local run. The tool environment was redirected to temporary uv cache and tool directories, because the sandbox mounts the user's uv directories read-only; the pinned tool versions were unchanged. The planted-red mutation count was not re-run for this receipt beyond what the gates themselves execute. Remote CI results are recorded by the pipeline, not here. History is not scrubbed: identifiers from before the redaction remain in `be90af1`.
