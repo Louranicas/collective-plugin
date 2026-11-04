@@ -1244,3 +1244,104 @@ class PrivateDirectoryCreation(unittest.TestCase):
                 self.assertEqual(existing.stat().st_mode & 0o777, 0o755)
                 self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
                 self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+
+
+class AdversarialDeliveryRegressions(unittest.TestCase):
+    def test_nonzero_exit_after_effect_is_unknown_and_cannot_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "effect-marker"
+            program = (
+                "from pathlib import Path; Path("
+                + repr(str(marker))
+                + ").write_text('effect committed'); raise SystemExit(1)"
+            )
+            backend = core.Backend()
+            state = snapshot()
+            state["endpoint"] = backend.endpoint
+            plan = core.make_mail_plan(state, "work", SENDER, RECIPIENT, "fixture", "body")
+            journal = core.Journal(Path(tmp) / "journal.jsonl")
+            real_run = backend.run
+            with (
+                mock.patch.object(backend, "snapshot", return_value=state),
+                mock.patch.object(
+                    backend, "run", side_effect=lambda argv: real_run([sys.executable, "-I", "-c", program])
+                ) as dispatch,
+                self.assertRaises(core.TransportUncertain),
+            ):
+                core.apply_mail_plan(plan, plan["digest"], backend, journal)
+            self.assertEqual(marker.read_text(), "effect committed")
+            records = [json.loads(line) for line in journal.path.read_text().splitlines()]
+            self.assertEqual([record["outcome"] for record in records], ["intent", "unknown"])
+            with (
+                mock.patch.object(backend, "snapshot", return_value=state),
+                mock.patch.object(backend, "run", side_effect=AssertionError("Replay must not dispatch")) as replay,
+                self.assertRaises(core.CollectiveError),
+            ):
+                core.apply_mail_plan(plan, plan["digest"], backend, journal)
+            replay.assert_not_called()
+            self.assertEqual(dispatch.call_count, 1)
+
+    def test_multibyte_notice_acknowledges_only_whole_alerts_and_drains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(heartbeat, "STATE", Path(tmp)):
+            memory = heartbeat.memory_state({})
+            rows: list[dict[str, str | None]] = [
+                {"pane": f"FINALALERT{n:02d}:" + "🧪" * 51, "agent": "🧪" * 64, "status": "blocked"} for n in range(16)
+            ]
+            for row in rows:
+                pane = row["pane"]
+                assert isinstance(pane, str)
+                memory["needs_since"]["hblocked:" + pane] = 1
+            alerts: list[tuple[str, str]] = []
+            heartbeat.native_alerts(rows, memory, 10000, alerts)
+            with mock.patch.object(heartbeat, "run", return_value=(0, "")) as transport:
+                heartbeat.finish({}, memory, alerts, 10000, dry=False)
+                first = transport.call_args.args[0][-1]
+                self.assertEqual(set(memory["sent"]), {key for key, text in alerts if text in first})
+                self.assertLessEqual(len(first.encode()), 7000)
+                self.assertIn("Full board:", first)
+                heartbeat.finish({}, memory, alerts, 10120, dry=False)
+                bodies = [call.args[0][-1] for call in transport.call_args_list]
+            delivered = {key for key, text in alerts if any(text in body for body in bodies)}
+            self.assertEqual(delivered, {key for key, _ in alerts})
+            self.assertEqual(set(memory["sent"]), delivered)
+
+    def test_error_envelopes_distinguish_known_refusal_from_uncertainty(self) -> None:
+        cases: list[tuple[object, str]] = [
+            ("forbidden", "refused"),
+            ("invalid_params", "refused"),
+            ("timeout", "unknown"),
+            ("internal_error", "unknown"),
+            (["forbidden"], "unknown"),
+            ({"code": "forbidden"}, "unknown"),
+            (True, "unknown"),
+            (None, "unknown"),
+        ]
+        for code, expected in cases:
+            for returncode in (0, 2):
+                with self.subTest(code=code, returncode=returncode), tempfile.TemporaryDirectory() as tmp:
+                    backend = core.Backend()
+                    state = snapshot()
+                    state["endpoint"] = backend.endpoint
+                    plan = core.make_mail_plan(state, "work", SENDER, RECIPIENT, "fixture", "body")
+                    journal = core.Journal(Path(tmp) / "journal.jsonl")
+                    envelope = json.dumps({"error": {"code": code}})
+                    program = "print(" + repr(envelope) + "); raise SystemExit(" + str(returncode) + ")"
+                    real_run = backend.run
+                    with (
+                        mock.patch.object(backend, "snapshot", return_value=state),
+                        mock.patch.object(
+                            backend,
+                            "run",
+                            side_effect=lambda argv, run=real_run, script=program: run(
+                                [sys.executable, "-I", "-c", script]
+                            ),
+                        ),
+                        self.assertRaises(core.CollectiveError) as raised,
+                    ):
+                        core.apply_mail_plan(plan, plan["digest"], backend, journal)
+                    rows = [json.loads(line) for line in journal.path.read_text().splitlines()]
+                    self.assertEqual([row["outcome"] for row in rows], ["intent", expected])
+                    if expected == "unknown":
+                        self.assertIsInstance(raised.exception, core.TransportUncertain)
+                    else:
+                        self.assertNotIsInstance(raised.exception, core.TransportUncertain)

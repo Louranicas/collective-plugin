@@ -566,19 +566,37 @@ def sweep(*, dry: bool) -> int:
     return finish(board, mem, alerts, now, dry=dry)
 
 
+def notice_batch(new: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], str]:
+    """Fit whole alerts and the footer into a UTF-8 byte budget; return only included alerts."""
+    max_alerts, max_bytes = 16, 7000
+
+    def render(rows: list[tuple[str, str]]) -> str:
+        return (
+            "Collective heartbeat: passive checks; change-only alerts.\n- "
+            + "\n- ".join(metadata(text, 256) for _, text in rows)
+            + f"\nAdditional pending alerts: {len(new) - len(rows)}. "
+            "Full board: ~/.local/state/collective/heartbeat.json"
+        )
+
+    selected: list[tuple[str, str]] = []
+    body = render(selected)
+    for row in new[:max_alerts]:
+        candidate = [*selected, row]
+        candidate_body = render(candidate)
+        if len(candidate_body.encode("utf-8")) > max_bytes:
+            break
+        selected, body = candidate, candidate_body
+    return selected, body
+
+
 def notify(new: list[tuple[str, str]], mem: MemoryState, now: float) -> None:
     """Bound human notices and back off failures; never automatically invoke models."""
     backoff = min(3600, 300 * 2 ** min(mem["notice_failures"], 4))
     if mem["notice_failures"] and now - mem["notice_attempt"] < backoff:
         return
-    selected = new[:16]
-    body = (
-        "Collective heartbeat: passive checks; change-only alerts.\n- "
-        + "\n- ".join(metadata(text, 256) for _, text in selected)
-        + f"\nAdditional pending alerts: {len(new) - len(selected)}. "
-        "Full board: ~/.local/state/collective/heartbeat.json"
-    )
-    body = body.encode("utf-8")[:7000].decode("utf-8", errors="ignore")
+    selected, body = notice_batch(new)
+    if not selected:
+        return
     mem["notice_attempt"] = now
     # Persist intent before sending; a process interruption must also observe backoff.
     mem["notice_failures"] += 1

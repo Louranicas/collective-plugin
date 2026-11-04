@@ -59,6 +59,20 @@ MAX_PLAN_BYTES = 65536
 READ_CHUNK = 65536
 RATE_LIMIT = 10
 RATE_WINDOW_SECONDS = 60
+REFUSAL_CODES = frozenset(
+    {
+        "invalid_request",
+        "unknown_verb",
+        "invalid_params",
+        "session_not_found",
+        "window_not_found",
+        "forbidden",
+        "not_human",
+        "loop_refused",
+        "rate_limited",
+        "agents_disabled",
+    },
+)
 RING_LIMIT = 100
 MAIL_IDS_KEPT = 512
 WATCH_SECONDS = 10
@@ -497,6 +511,13 @@ def _recv_frame(s: socket.socket, deadline: float) -> bytearray:
     return response
 
 
+def _refusal_code(value: object) -> str | None:
+    """Recognize documented request rejections, never generic tool failures."""
+    error = value.get("error") if isinstance(value, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if isinstance(code, str) and code in REFUSAL_CODES else None
+
+
 def _parse_tool_result(
     argv: list[str],
     returncode: int,
@@ -507,13 +528,15 @@ def _parse_tool_result(
 ) -> Any:  # noqa: ANN401 - JSON value or text by flag
     stdout = output.decode("utf-8", errors="replace")
     if returncode:
-        code = "command_failed"
-        with contextlib.suppress(ValueError, AttributeError):
-            e = json.loads(stdout or errors.decode("utf-8", errors="replace")).get("error", {})
-            if isinstance(e, dict):
-                code = e.get("code", code)
-        msg = f"{Path(argv[0]).name}: {clean(code)} (exit {returncode})"
-        raise CollectiveError(msg)
+        envelope: object = None
+        with contextlib.suppress(ValueError):
+            envelope = json.loads(stdout or errors.decode("utf-8", errors="replace"))
+        code = _refusal_code(envelope)
+        if code is not None:
+            msg = f"{Path(argv[0]).name}: {code} (exit {returncode})"
+            raise CollectiveError(msg)
+        msg = f"{Path(argv[0]).name}: command_failed (exit {returncode}); submission outcome unknown"
+        raise TransportUncertain(msg)
     if not as_json:
         return stdout
     try:
@@ -523,8 +546,11 @@ def _parse_tool_result(
         msg = "Tool returned non-JSON data"
         raise TransportUncertain(msg) from exc
     if isinstance(value, dict) and value.get("error"):
-        msg = "Daemon refused request"
-        raise CollectiveError(msg)
+        if _refusal_code(value) is not None:
+            msg = "Daemon refused request"
+            raise CollectiveError(msg)
+        msg = "Daemon error did not confirm refusal; submission outcome unknown"
+        raise TransportUncertain(msg)
     return value.get("result", value) if isinstance(value, dict) else value
 
 
