@@ -150,28 +150,28 @@ Publication redaction (2026-11-04): pane UUIDs, host names, the local user name,
 
 ### Current acceptance receipt, 2026-11-04 (supersedes the 82- and 83-test counts above)
 
-Measured 2026-11-04T13:03:50.018750+00:00 (UTC; Australia/ACT is the following calendar day). This is the current local source-bound receipt. Earlier 82-, 83- and 98-test records are historical snapshots. A later source or test edit requires fresh validation.
+Measured 2026-11-04T13:27:43Z (UTC; Australia/ACT is the following calendar day). This is the current local source-bound receipt. Earlier 82-, 83-, 98- and 101-test records are historical snapshots. A later source or test edit requires fresh validation.
 
 | File | sha256 prefix (16 hex) |
 |---|---|
-| `collective.py` | `b7ced86f1416f251` |
+| `collective.py` | `e0f839049bd9532e` |
 | `heartbeat.py` | `04e66690a95ba215` |
 | `install_monitor.py` | `d4c1a9d8a595e818` |
 | `test_collective.py` | `d983994f52b30d04` |
-| `test_hardening.py` | `a167a6493367863c` |
+| `test_hardening.py` | `09e4259a2073ed43` |
 | `tools/check.py` | `22d4b4f3ff3dc9c5` |
 | `pyproject.toml` | `905c194eaf63ce7c` |
 
 | Gate | Result |
 |---|---|
 | Canonical nine gates | **ALL PASS**: `python3 -I tools/check.py --keep-going` |
-| Tests | **101 OK**: 36 in `test_collective.py`, 65 in `test_hardening.py` |
-| Branch-instrumented coverage, pinned coverage 7.17.1 | **94%** aggregate; core **93%**, heartbeat **94%**, installer **95%**; aggregate and every production module meet the 90% floor |
+| Tests | **107 OK**: 36 in `test_collective.py`, 71 in `test_hardening.py` |
+| Branch-instrumented coverage, pinned coverage 7.17.1 | **94%** aggregate; core **94%**, heartbeat **94%**, installer **95%**; aggregate and every production module meet the 90% floor |
 | New delivery controls | Whole-alert UTF-8 batching retains its footer and drains omitted alerts on later sweeps. Only included alerts are acknowledged. Ambiguous process exits/error envelopes journal **unknown** and cannot replay; documented request refusals remain **refused**. |
 
 The two delivery defects were independently reproduced against the previous public draft revision, with temporary effects and mocked notification transport. The follow-up adds those behavioral regressions plus a malformed/error-code matrix. No source-text assertions substitute for those effects.
 
-The `collective.py` hash above includes a later wording-only change: shared tool-failure, timeout and output-limit messages now read "outcome unknown" instead of submission/write wording, because read-only commands share that transport path. Classification is unchanged; re-measured locally at 101 OK with the same per-module coverage.
+The `collective.py` hash above includes two later changes. First, wording only: shared tool-failure, timeout and output-limit messages read "outcome unknown" because read-only commands share that transport path (measured then at 101 OK). Second, the mail write-phase boundary: only a failure to launch the process is **refused** ("Command unavailable"); any I/O, selector or cleanup failure after the child starts is **unknown** and cannot replay. Once submission is attempted, `mail-apply` says the mail may already be delivered, to inspect the recipient inbox before any new plan and never resend blindly. If final journal recording fails, the delivery result is still reported (an acknowledged receipt stays `submitted` with a `journal` note) and the consumed intent still refuses replay. `MailWritePhaseBoundary` covers these with a real child that writes an effect marker before an injected post-readiness selector failure, plus injected journal failures; five of its six tests failed on the previous revision.
 
 **Release state at this measurement:** the prior revision `ed065371` passed the first pipeline and GitHub's Python 3.12/3.13/3.14 CI, but PR #1 remains **draft**. These follow-up hashes still require a new full pipeline and remote CI before merge/deployment. GitLab main still contains only the empty bootstrap. The heartbeat timer is paused during hardening; the plugin remains registered. Earlier commits retain nonsecret diagnostic labels and test routing identifiers; no history-scrub claim is made.
 

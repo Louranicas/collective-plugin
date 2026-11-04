@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import selectors
 import shutil
 import socket
 import struct
@@ -1226,6 +1227,143 @@ class DeliveryOutcomeClassification(unittest.TestCase):
                         core.apply_mail_plan(plan, plan["digest"], backend, journal)
                 records = [json.loads(line) for line in journal.path.read_text().splitlines()]
                 self.assertEqual([record["outcome"] for record in records], ["intent", outcome])
+
+
+class MailWritePhaseBoundary(unittest.TestCase):
+    def fixture(self, tmp: str) -> tuple[Any, dict[str, Any], dict[str, Any], Any]:
+        backend = core.Backend()
+        state = snapshot()
+        state["endpoint"] = backend.endpoint
+        plan = core.make_mail_plan(state, "work", SENDER, RECIPIENT, "fixture", "body")
+        return backend, state, plan, core.Journal(Path(tmp) / "journal.jsonl")
+
+    def outcomes(self, journal: Any) -> list[str]:
+        return [json.loads(line)["outcome"] for line in journal.path.read_text().splitlines()]
+
+    def assert_replay_refused(self, backend: Any, state: dict[str, Any], plan: dict[str, Any], journal: Any) -> None:
+        with (
+            mock.patch.object(backend, "snapshot", return_value=state),
+            mock.patch.object(backend, "run", side_effect=AssertionError("Replay must not dispatch")) as replay,
+            self.assertRaises(core.CollectiveError),
+        ):
+            core.apply_mail_plan(plan, plan["digest"], backend, journal)
+        replay.assert_not_called()
+
+    def test_io_failure_after_child_start_is_unknown_with_inbox_guidance(self) -> None:
+        class FailAfterReadiness(selectors.DefaultSelector):
+            @override
+            def select(self, timeout: float | None = None) -> Any:
+                ready = super().select(timeout)
+                if ready:
+                    raise OSError("fixture selector failure after readiness")
+                return ready
+
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "effect-marker"
+            program = (
+                "import sys; from pathlib import Path; Path("
+                + repr(str(marker))
+                + ").write_text('effect committed'); print('{\"message_id\": 7}'); sys.stdout.flush()"
+            )
+            backend, state, plan, journal = self.fixture(tmp)
+            real_run = backend.run
+            with (
+                mock.patch.object(selectors, "DefaultSelector", FailAfterReadiness),
+                mock.patch.object(backend, "snapshot", return_value=state),
+                mock.patch.object(
+                    backend, "run", side_effect=lambda argv: real_run([sys.executable, "-I", "-c", program])
+                ) as dispatch,
+                self.assertRaises(core.TransportUncertain) as raised,
+            ):
+                core.apply_mail_plan(plan, plan["digest"], backend, journal)
+            self.assertEqual(marker.read_text(), "effect committed")
+            self.assertEqual(dispatch.call_count, 1)
+            self.assertEqual(self.outcomes(journal), ["intent", "unknown"])
+            self.assertIn("may already be delivered", str(raised.exception))
+            self.assertIn("inspect recipient inbox", str(raised.exception))
+            self.assertIsInstance(raised.exception.__cause__, core.TransportUncertain)
+            self.assert_replay_refused(backend, state, plan, journal)
+
+    def test_missing_executable_before_start_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend, state, plan, journal = self.fixture(tmp)
+            backend.tuios_bin = str(Path(tmp) / "missing-tuios")
+            with (
+                mock.patch.object(backend, "snapshot", return_value=state),
+                self.assertRaises(core.CollectiveError) as raised,
+            ):
+                core.apply_mail_plan(plan, plan["digest"], backend, journal)
+            self.assertNotIsInstance(raised.exception, core.TransportUncertain)
+            self.assertIn("Command unavailable", str(raised.exception))
+            self.assertEqual(self.outcomes(journal), ["intent", "refused"])
+
+    def test_transport_uncertainty_names_mail_outcome_and_no_resend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend, state, plan, journal = self.fixture(tmp)
+            timeout = core.TransportUncertain("Command timed out; outcome unknown")
+            with (
+                mock.patch.object(backend, "snapshot", return_value=state),
+                mock.patch.object(backend, "tuios", side_effect=timeout),
+                self.assertRaises(core.TransportUncertain) as raised,
+            ):
+                core.apply_mail_plan(plan, plan["digest"], backend, journal)
+            message = str(raised.exception)
+            self.assertIn("Command timed out", message)
+            self.assertIn("may already be delivered", message)
+            self.assertIn("inspect recipient inbox", message)
+            self.assertIn("never resend", message)
+            self.assertIs(raised.exception.__cause__, timeout)
+            self.assertEqual(self.outcomes(journal), ["intent", "unknown"])
+
+    def test_journal_failure_after_positive_receipt_reports_acknowledged_submission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend, state, plan, journal = self.fixture(tmp)
+            with (
+                mock.patch.object(backend, "snapshot", return_value=state),
+                mock.patch.object(backend, "tuios", return_value={"message_id": 7}) as dispatch,
+                mock.patch.object(journal, "record", side_effect=OSError("fixture journal failure")),
+            ):
+                result = core.apply_mail_plan(plan, plan["digest"], backend, journal)
+            self.assertEqual(dispatch.call_count, 1)
+            self.assertEqual(result["outcome"], "submitted")
+            self.assertEqual(result["receipt"], {"message_id": 7})
+            self.assertIn("recording failed", result["journal"])
+            self.assertEqual(self.outcomes(journal), ["intent"])
+            self.assert_replay_refused(backend, state, plan, journal)
+
+    def test_journal_failure_after_uncertain_dispatch_keeps_unknown_guidance(self) -> None:
+        for error in (core.TransportUncertain("Command timed out; outcome unknown"), RuntimeError("fixture")):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as tmp:
+                backend, state, plan, journal = self.fixture(tmp)
+                with (
+                    mock.patch.object(backend, "snapshot", return_value=state),
+                    mock.patch.object(backend, "tuios", side_effect=error) as dispatch,
+                    mock.patch.object(journal, "record", side_effect=OSError("fixture journal failure")),
+                    self.assertRaises(core.TransportUncertain) as raised,
+                ):
+                    core.apply_mail_plan(plan, plan["digest"], backend, journal)
+                self.assertEqual(dispatch.call_count, 1)
+                self.assertIn("inspect recipient inbox", str(raised.exception))
+                self.assertIn("recording failed", str(raised.exception))
+                self.assertIs(raised.exception.__cause__, error)
+                self.assertEqual(self.outcomes(journal), ["intent"])
+                self.assert_replay_refused(backend, state, plan, journal)
+
+    def test_journal_failure_after_known_refusal_keeps_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend, state, plan, journal = self.fixture(tmp)
+            refusal = core.CollectiveError("tuios: forbidden (exit 2)")
+            with (
+                mock.patch.object(backend, "snapshot", return_value=state),
+                mock.patch.object(backend, "tuios", side_effect=refusal),
+                mock.patch.object(journal, "record", side_effect=OSError("fixture journal failure")),
+                self.assertRaises(core.CollectiveError) as raised,
+            ):
+                core.apply_mail_plan(plan, plan["digest"], backend, journal)
+            self.assertNotIsInstance(raised.exception, core.TransportUncertain)
+            self.assertIn("forbidden", str(raised.exception))
+            self.assertIn("recording failed", str(raised.exception))
+            self.assertIs(raised.exception.__cause__, refusal)
 
 
 class PrivateDirectoryCreation(unittest.TestCase):

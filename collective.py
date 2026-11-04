@@ -434,6 +434,21 @@ def _require_confirmed_receipt(result: object) -> JsonDict:
     return result
 
 
+MAIL_OUTCOME_UNKNOWN = (
+    "mail submission outcome unknown and it may already be delivered; "
+    "inspect recipient inbox before any new plan and never resend blindly"
+)
+
+
+def _record_outcome(journal: Journal, digest: str, outcome: str) -> str:
+    """Persist the final outcome; on failure return a note instead of masking the delivery result."""
+    try:
+        journal.record(digest, outcome)
+    except (OSError, CollectiveError) as exc:
+        return f"; final journal recording failed ({type(exc).__name__}); plan stays consumed"
+    return ""
+
+
 def apply_mail_plan(
     plan: object,
     confirmation: object,
@@ -448,25 +463,33 @@ def apply_mail_plan(
     session = plan["payload"].get("session")
     payload = validate_mail_plan(plan, backend.snapshot(session), confirmation, now)
     journal.consume(plan)  # Durable intent is committed BEFORE submission.
+    digest = plan["digest"]
     try:
         result = _require_confirmed_receipt(backend.tuios("send-agent-message", payload))
-    except TransportUncertain:
-        journal.record(plan["digest"], "unknown")
-        raise
-    except CollectiveError:
-        journal.record(plan["digest"], "refused")
+    except TransportUncertain as exc:
+        note = _record_outcome(journal, digest, "unknown")
+        msg = f"{exc}; {MAIL_OUTCOME_UNKNOWN}{note}"
+        raise TransportUncertain(msg) from exc
+    except CollectiveError as exc:
+        note = _record_outcome(journal, digest, "refused")
+        if note:
+            msg = f"{exc}{note}"
+            raise CollectiveError(msg) from exc
         raise
     except Exception as exc:
-        journal.record(plan["digest"], "unknown")
-        msg = "Submission outcome unknown; inspect recipient inbox before any new plan"
+        note = _record_outcome(journal, digest, "unknown")
+        msg = f"{MAIL_OUTCOME_UNKNOWN}{note}"
         raise TransportUncertain(msg) from exc
-    journal.record(plan["digest"], "submitted")
-    return {
+    receipt: JsonDict = {
         "outcome": "submitted",
-        "digest": plan["digest"],
+        "digest": digest,
         "receipt": result,
         "acknowledgement": "Submission is not a peer reply or acceptance",
     }
+    note = _record_outcome(journal, digest, "submitted")
+    if note:
+        receipt["journal"] = note.removeprefix("; ")
+    return receipt
 
 
 def _remaining(deadline: float) -> float:
@@ -577,7 +600,12 @@ class Backend:
         errors = bytearray()
         deadline = time.monotonic() + self.timeout
         try:
-            with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:  # noqa: S603 - argv list, no shell; the audited door
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603 - argv list, no shell; the audited door
+        except OSError as exc:
+            msg = f"Command unavailable: {Path(argv[0]).name}"
+            raise CollectiveError(msg) from exc
+        try:
+            with proc:
                 try:
                     with selectors.DefaultSelector() as poll:
                         for pipe, target in ((proc.stdout, output), (proc.stderr, errors)):
@@ -603,8 +631,8 @@ class Backend:
             msg = "Command timed out; outcome unknown"
             raise TransportUncertain(msg) from exc
         except OSError as exc:
-            msg = f"Command unavailable: {Path(argv[0]).name}"
-            raise CollectiveError(msg) from exc
+            msg = f"Command I/O failed after start: {Path(argv[0]).name}; outcome unknown"
+            raise TransportUncertain(msg) from exc
         return _parse_tool_result(argv, returncode, output, errors, as_json=as_json)
 
     def tuios(self, verb: str, params: JsonDict) -> JsonDict:
