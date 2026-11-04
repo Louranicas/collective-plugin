@@ -194,6 +194,76 @@ class ReaderPolicies(unittest.TestCase):
                 readers.read_private_json(self.path)
             self.assertEqual(readers.read_owned_bytes(self.path), data)
 
+    def test_duplicate_json_keys_are_refused_at_any_depth(self) -> None:
+        cases = (
+            b'{"x":1,"x":2}',
+            b'{"x":1,"x":1}',
+            b'{"outer":{"x":1,"x":2}}',
+            b'[{"x":1,"x":2}]',
+            b'{"x":1,"\\u0078":2}',
+            '{"\u0394":1,"\\u0394":2}'.encode(),
+        )
+        for data in cases:
+            with self.subTest(data=data):
+                for payload in (data, bytearray(data), data.decode()):
+                    with self.assertRaisesRegex(ValueError, "Duplicate JSON"):
+                        readers.parse_json(payload)
+                self.write(data)
+                with self.assertRaisesRegex(ValueError, "Duplicate JSON"):
+                    readers.read_private_json(self.path)
+                self.assertEqual(self.path.read_bytes(), data)
+
+    def test_nonfinite_json_numbers_are_refused_including_overflow(self) -> None:
+        cases = (
+            b"NaN",
+            b"Infinity",
+            b"-Infinity",
+            b"1e999",
+            b"-1e999",
+            b'{"value":NaN}',
+            b'{"outer":{"value":Infinity}}',
+            b"[-Infinity]",
+            b"[1E+9999]",
+        )
+        for data in cases:
+            with self.subTest(data=data):
+                for payload in (data, bytearray(data), data.decode()):
+                    with self.assertRaisesRegex(ValueError, "Non-finite JSON"):
+                        readers.parse_json(payload)
+                self.write(data)
+                with self.assertRaisesRegex(ValueError, "Non-finite JSON"):
+                    readers.read_private_json(self.path)
+                self.assertEqual(self.path.read_bytes(), data)
+
+    def test_strict_json_preserves_unicode_finite_numbers_and_types(self) -> None:
+        data = (
+            '{"label":"Δοκιμή","integer":12345678901234567890,"float":1.25,"large":1e308,'
+            '"small":5e-324,"underflow":1e-999,"boolean":true,"empty":null,'
+            '"nested":[{"x":1},{"x":2}],"x":3}'
+        ).encode()
+        expected = {
+            "label": "Δοκιμή",
+            "integer": 12345678901234567890,
+            "float": 1.25,
+            "large": 1e308,
+            "small": 5e-324,
+            "underflow": 0.0,
+            "boolean": True,
+            "empty": None,
+            "nested": [{"x": 1}, {"x": 2}],
+            "x": 3,
+        }
+        for payload in (data, bytearray(data), data.decode()):
+            self.assertEqual(readers.parse_json(payload), expected)
+        self.write(data)
+        value = readers.read_private_json(self.path)
+        self.assertEqual(value, expected)
+        assert isinstance(value, dict)
+        self.assertIs(type(value["integer"]), int)
+        self.assertIs(type(value["float"]), float)
+        self.assertIs(type(value["boolean"]), bool)
+        self.assertIsNone(value["empty"])
+
     def test_deep_json_array_is_a_bounded_value_error_with_cause(self) -> None:
         depth = sys.getrecursionlimit() * 2
         self.write(b"[" * depth + b"0" + b"]" * depth)
@@ -203,6 +273,7 @@ class ReaderPolicies(unittest.TestCase):
         decoder.scan_once = py_make_scanner(decoder)  # type: ignore[attr-defined]  # Runtime JSONDecoder scanner hook.
         with (
             mock.patch.object(json, "_default_decoder", decoder),
+            mock.patch.object(json.scanner, "make_scanner", py_make_scanner),
             self.assertRaisesRegex(ValueError, "JSON nesting") as caught,
         ):
             readers.read_private_json(self.path)

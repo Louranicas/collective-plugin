@@ -10,6 +10,7 @@ O_NONBLOCK avoids FIFO peer waits; it is not full protection from device drivers
 from __future__ import annotations
 
 import json
+import math
 import os
 import stat
 from enum import Enum, auto
@@ -109,8 +110,31 @@ def read_private_json(path: str | os.PathLike[str], *, limit: int = DEFAULT_LIMI
     return parse_json(_read(path, _Policy.PRIVATE_STATE, limit))
 
 
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("Duplicate JSON object key")
+        value[key] = item
+    return value
+
+
+def _reject_constant(_value: str) -> object:
+    raise ValueError("Non-finite JSON number")
+
+
+def _finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Non-finite JSON number")
+    return number
+
+
 def parse_json(data: str | bytes | bytearray) -> object:
-    """Parse JSON and normalize encoding, syntax and parser-recursion failures to ValueError.
+    """Parse strict JSON and normalize encoding, syntax and parser-recursion failures to ValueError.
+
+    A duplicate object key at any depth and a non-finite number (NaN, Infinity or a
+    float that overflows) also raise ValueError, so ambiguous data never parses.
 
     Callers bound file or transport bytes. Nesting supported by the interpreter is
     accepted; this helper imposes no additional depth cap. Interpreter recursion
@@ -118,7 +142,9 @@ def parse_json(data: str | bytes | bytearray) -> object:
     """
     text = data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else data
     try:
-        return json.loads(text)
+        return json.loads(
+            text, object_pairs_hook=_unique_object, parse_constant=_reject_constant, parse_float=_finite_float
+        )
     except RecursionError as exc:
         raise ValueError("JSON nesting exceeds the supported parser depth") from exc
 

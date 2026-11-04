@@ -4,8 +4,11 @@ import copy
 import json
 import multiprocessing
 import os
+import selectors
 import socket
 import struct
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -539,6 +542,340 @@ class HeartbeatActivity(unittest.TestCase):
             with self.assertRaises(ValueError):
                 hb.load("memory.json", {})
             self.assertEqual(p.read_text(), "{}")
+
+
+class MonitorStateDirectory(unittest.TestCase):
+    def test_relative_state_dir_is_refused_before_any_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                with self.assertRaisesRegex(c.CollectiveError, "absolute state directory"):
+                    c.monitor(FakeBackend(), "session-0", "relative-state")
+                self.assertFalse(Path(tmp, "relative-state").exists())
+            finally:
+                os.chdir(cwd)
+
+
+class MailReceiptContracts(unittest.TestCase):
+    TOOL = """import json, sys
+from pathlib import Path
+root = Path(__file__).parent
+mode = json.loads((root / 'mode.json').read_text())
+verb = sys.argv[2]
+with (root / 'calls').open('a') as log:
+    log.write(verb + '\\n')
+if verb == 'list-attention':
+    value = {'boot_id': 'test-boot'}
+elif verb == 'list-agents':
+    value = {'agents': mode['agents']}
+elif verb == 'send-agent-message':
+    rows = [json.loads(line) for line in Path(mode['journal']).read_text().splitlines()]
+    assert any(row.get('digest') == mode['digest'] and row.get('outcome') == 'intent' for row in rows)
+    marker = root / 'dispatches'
+    marker.write_text(marker.read_text() + 'sent\\n' if marker.exists() else 'sent\\n')
+    value = mode['envelope']
+else:
+    raise AssertionError(verb)
+if verb == 'send-agent-message' and mode.get('raw_reply') is not None:
+    print(mode['raw_reply'])
+else:
+    print(json.dumps(value))
+if verb == 'send-agent-message':
+    raise SystemExit(mode.get('exit_code', 0))
+"""
+
+    def cli_case(
+        self, envelope: Any, accepted: bool, *, exit_code: int = 0, refused: bool = False, raw_reply: str | None = None
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "bin"
+            binary.mkdir(mode=0o700)
+            tool = binary / "tuios"
+            tool.write_text(f"#!{sys.executable}\n{self.TOOL}", encoding="utf-8")
+            tool.chmod(0o700)
+            env = {**os.environ, "HOME": str(root), "PATH": str(binary), "TUIOS_SERVER": ""}
+            with mock.patch.dict(os.environ, env):
+                backend = c.Backend()
+                state = snapshot()
+                state["endpoint"] = backend.endpoint
+                plan = c.make_mail_plan(state, "work", SENDER, RECIPIENT, "receipt contract", "owned fake only")
+            plan_path, journal = root / "plan.json", root / "journal.jsonl"
+            c.write_private_json(plan_path, plan, exclusive=True)
+            (binary / "mode.json").write_text(
+                json.dumps(
+                    {
+                        "agents": state["agents"],
+                        "envelope": envelope,
+                        "journal": str(journal),
+                        "digest": plan["digest"],
+                        "exit_code": exit_code,
+                        "raw_reply": raw_reply,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            argv = [
+                sys.executable,
+                "-I",
+                "-B",
+                str(Path(c.__file__)),
+                "--json",
+                "mail-apply",
+                "--plan",
+                str(plan_path),
+                "--confirm",
+                plan["digest"],
+                "--journal",
+                str(journal),
+                "--keep-plan",
+            ]
+            first = subprocess.run(  # noqa: S603 - real CLI with private fake tuios as the only PATH entry
+                argv, env=env, capture_output=True, text=True, timeout=10, check=False
+            )
+            self.assertEqual(first.returncode, 0 if accepted else 2, first.stdout + first.stderr)
+            if accepted:
+                self.assertEqual(json.loads(first.stdout)["outcome"], "submitted")
+            elif not refused:
+                self.assertIn("outcome unknown", json.loads(first.stderr)["error"])
+            else:
+                self.assertNotIn("outcome unknown", json.loads(first.stderr)["error"])
+            rows = [json.loads(line) for line in journal.read_text().splitlines()]
+            expected = "submitted" if accepted else "refused" if refused else "unknown"
+            self.assertEqual([row["outcome"] for row in rows], ["intent", expected])
+            before = journal.read_bytes()
+            replay = subprocess.run(  # noqa: S603 - exact consumed plan; fake dispatch marker proves no resend
+                argv, env=env, capture_output=True, text=True, timeout=10, check=False
+            )
+            self.assertEqual(replay.returncode, 2)
+            self.assertIn("already consumed", json.loads(replay.stderr)["error"])
+            self.assertEqual((binary / "dispatches").read_text(), "sent\n")
+            self.assertEqual(journal.read_bytes(), before)
+
+    def test_public_cli_keeps_outer_and_inner_failure_evidence(self) -> None:
+        cases = [
+            ({"message_id": 42}, True),
+            ({"success": True, "error": None, "result": {"success": True, "message_id": 42}}, True),
+            ({"success": False, "result": {"message_id": 42}}, False),
+            ({"success": False, "result": {"success": True, "message_id": 42}}, False),
+            ({"success": 0, "result": {"message_id": 42}}, False),
+            ({"success": "false", "result": {"message_id": 42}}, False),
+            ({"success": True, "error": [], "result": {"message_id": 42}}, False),
+            ({"success": True, "error": False, "result": {"message_id": 42}}, False),
+            ({"success": True, "result": {"success": False, "message_id": 42}}, False),
+            ({"success": True, "result": {"success": 0, "message_id": 42}}, False),
+            ({"success": True, "result": {"error": {}, "message_id": 42}}, False),
+        ]
+        for envelope, accepted in cases:
+            with self.subTest(envelope=envelope):
+                self.cli_case(envelope, accepted)
+
+    def test_contradictory_refusals_are_unknown_at_zero_and_nonzero_exit(self) -> None:
+        error = {"code": "forbidden"}
+        contradictions = [
+            {"error": error, "success": True},
+            {"error": error, "message_id": 42},
+            {"error": error, "result": {"success": True, "message_id": 42}},
+            {"error": error, "success": False, "result": {"message_id": 42}},
+        ]
+        for exit_code in (0, 1):
+            for envelope in contradictions:
+                with self.subTest(exit_code=exit_code, envelope=envelope):
+                    self.cli_case(envelope, False, exit_code=exit_code)
+            with self.subTest(exit_code=exit_code, control="clean refusal"):
+                self.cli_case({"success": False, "error": error}, False, exit_code=exit_code, refused=True)
+            with self.subTest(exit_code=exit_code, control="clean submission"):
+                self.cli_case({"success": True, "message_id": 42}, exit_code == 0, exit_code=exit_code)
+
+    def test_raw_duplicate_keys_never_confirm_submission_or_refusal(self) -> None:
+        replies = [
+            '{"success":false,"success":true,"message_id":42}',
+            '{"success":false,"\\u0073uccess":true,"result":{"message_id":42}}',
+            '{"message_id":0,"message_id":42}',
+            '{"error":{"code":"forbidden"},"error":null,"message_id":42}',
+            '{"result":{"message_id":0,"\\u006dessage_id":42}}',
+            '{"error":{"code":"rate_limited","code":"forbidden"}}',
+        ]
+        for raw in replies:
+            with self.subTest(raw=raw):
+                self.cli_case(None, False, raw_reply=raw)
+        self.cli_case(None, True, raw_reply='{"\\u006dessage_id":42}')
+
+    def test_mixed_delivery_layers_are_unknown_at_both_exit_codes(self) -> None:
+        values = [
+            {"message_id": 42, "result": {"success": False, "error": {"code": "forbidden"}}},
+            {"message_id": 42, "result": {"message_id": 43}},
+            {"message_id": 42, "result": {"message_id": 42}},
+            {"message_id": 42, "result": {}},
+            {"message_id": 42, "result": None},
+        ]
+        for exit_code in (0, 1):
+            for value in values:
+                with self.subTest(exit_code=exit_code, value=value):
+                    self.cli_case(value, False, exit_code=exit_code)
+
+    def test_direct_receipt_rejects_non_boolean_success_and_malformed_error(self) -> None:
+        success_values: list[Any] = [0, "false", None, [], {}]
+        error_values: list[Any] = [False, "", [], {}]
+        values = [{"success": value, "message_id": 42} for value in success_values] + [
+            {"error": value, "message_id": 42} for value in error_values
+        ]
+        for receipt in values:
+            with self.subTest(receipt=receipt), tempfile.TemporaryDirectory() as tmp:
+                backend = FakeBackend()
+                plan = c.make_mail_plan(snapshot(), "work", SENDER, RECIPIENT, "receipt", "fake", now=NOW)
+                journal = c.Journal(Path(tmp) / "journal.jsonl")
+                with mock.patch.object(backend, "tuios", return_value=receipt) as send:
+                    with self.assertRaises(c.TransportUncertain):
+                        c.apply_mail_plan(plan, plan["digest"], backend, journal, now=NOW)
+                    with self.assertRaisesRegex(c.CollectiveError, "already consumed"):
+                        c.apply_mail_plan(plan, plan["digest"], backend, journal, now=NOW)
+                    self.assertEqual(send.call_count, 1)
+                rows = [json.loads(line) for line in journal.path.read_text().splitlines()]
+                self.assertEqual([row["outcome"] for row in rows], ["intent", "unknown"])
+
+    def test_fractional_rolling_minute_does_not_admit_an_early_eleventh_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = c.Journal(Path(tmp) / "journal.jsonl")
+            backend = FakeBackend()
+            first_time = NOW + 0.9
+            with mock.patch.object(time, "time", return_value=first_time):
+                for i in range(10):
+                    plan = c.make_mail_plan(snapshot(), "work", SENDER, RECIPIENT, f"intent {i}", "fake", now=NOW)
+                    c.apply_mail_plan(plan, plan["digest"], backend, journal, now=NOW)
+            plan = c.make_mail_plan(snapshot(), "work", SENDER, RECIPIENT, "eleventh", "fake", now=NOW)
+            with (
+                mock.patch.object(time, "time", return_value=NOW + 60.0),
+                self.assertRaisesRegex(c.CollectiveError, "rate limit"),
+            ):
+                c.apply_mail_plan(plan, plan["digest"], backend, journal, now=NOW + 60)
+            self.assertEqual(len(backend.calls), 10)
+            with mock.patch.object(time, "time", return_value=first_time + 60):
+                result = c.apply_mail_plan(plan, plan["digest"], backend, journal, now=NOW + 61)
+            self.assertEqual(result["outcome"], "submitted")
+            self.assertEqual(len(backend.calls), 11)
+
+
+class MailTextContracts(unittest.TestCase):
+    def plan_case(self, subject: str, body: str, accepted: bool) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "bin"
+            binary.mkdir(mode=0o700)
+            tool = binary / "tuios"
+            tool.write_text(f"#!{sys.executable}\n{MailReceiptContracts.TOOL}", encoding="utf-8")
+            tool.chmod(0o700)
+            (binary / "mode.json").write_text(json.dumps({"agents": snapshot()["agents"]}), encoding="utf-8")
+            text_file, plan_path = root / "body.txt", root / "plan.json"
+            text_file.write_text(body, encoding="utf-8")
+            text_file.chmod(0o600)
+            argv = [
+                sys.executable,
+                "-I",
+                "-B",
+                str(Path(c.__file__)),
+                "--json",
+                "mail-plan",
+                "--session",
+                "work",
+                "--sender",
+                SENDER,
+                "--to",
+                RECIPIENT,
+                "--subject",
+                subject,
+                "--text-file",
+                str(text_file),
+                "--output",
+                str(plan_path),
+            ]
+            result = subprocess.run(  # noqa: S603 - public planner and isolated owned fake tuios only
+                argv,
+                env={**os.environ, "HOME": str(root), "PATH": str(binary), "TUIOS_SERVER": ""},
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0 if accepted else 2, result.stdout + result.stderr)
+            self.assertEqual(plan_path.exists(), accepted)
+            if accepted:
+                plan = c.read_private_json(plan_path)
+                self.assertEqual(plan["payload"]["subject"], subject)
+                self.assertEqual(plan["payload"]["text"], body)
+            else:
+                self.assertIn("refused", json.loads(result.stderr)["error"])
+            calls = (binary / "calls").read_text() if (binary / "calls").exists() else ""
+            self.assertNotIn("send-agent-message", calls)
+            self.assertFalse((binary / "dispatches").exists())
+
+    def test_public_planner_refuses_c1_and_hidden_format_controls(self) -> None:
+        for control in ("\u0085", "\u009b", "\u061c", "\u2060", "\u00ad"):
+            for field in ("subject", "body"):
+                with self.subTest(codepoint=hex(ord(control)), field=field):
+                    subject = "before" + control + "after" if field == "subject" else "readable subject"
+                    body = "before" + control + "after" if field == "body" else "readable body"
+                    self.plan_case(subject, body, False)
+
+    def test_public_planner_preserves_visible_unicode_combining_marks_and_body_whitespace(self) -> None:
+        self.plan_case("Café e\u0301 — 中文", "Line one\n\tCafé e\u0301 — 中文 🦉\n", True)
+
+    def test_line_and_paragraph_separators_are_refused_only_in_singleline_subject(self) -> None:
+        for separator in ("\u2028", "\u2029"):
+            with self.subTest(codepoint=hex(ord(separator)), field="subject"):
+                self.plan_case("before" + separator + "after", "readable body", False)
+            with self.subTest(codepoint=hex(ord(separator)), field="body"):
+                self.plan_case("readable subject", "before" + separator + "after", True)
+
+
+class DashboardWatchOutput(unittest.TestCase):
+    def test_small_piped_frame_is_visible_while_first_wait_is_still_running(self) -> None:
+        program = (
+            "import argparse, sys, threading\n"
+            f"sys.path.insert(0, {str(Path(c.__file__).parent)!r})\n"
+            "import collective\n"
+            "collective.observe = lambda *_: {'fixture': 'small frame'}\n"
+            "def wait(_):\n"
+            "    print('FIRST_WAIT', file=sys.stderr, flush=True)\n"
+            "    threading.Event().wait(10)\n"
+            "collective.time.sleep = wait\n"
+            "collective._dashboard(argparse.Namespace(session='work', watch=True), object())\n"
+        )
+        proc = subprocess.Popen(  # noqa: S603 - fixed local child over isolated fake read backend
+            [sys.executable, "-I", "-B", "-c", program],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        received = {"stdout": bytearray(), "stderr": bytearray()}
+        try:
+            assert proc.stdout is not None
+            assert proc.stderr is not None
+            deadline = time.monotonic() + 3
+            with selectors.DefaultSelector() as poll:
+                for pipe, name in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
+                    os.set_blocking(pipe.fileno(), False)
+                    poll.register(pipe, selectors.EVENT_READ, name)
+                while poll.get_map() and time.monotonic() < deadline:
+                    for key, _ in poll.select(max(0, deadline - time.monotonic())):
+                        chunk = os.read(key.fd, 4096)
+                        if not chunk:
+                            poll.unregister(key.fileobj)
+                        else:
+                            received[key.data].extend(chunk)
+                    if b"FIRST_WAIT" in received["stderr"] and b'"small frame"' in received["stdout"]:
+                        break
+            self.assertIsNone(proc.poll(), "fixture must remain alive, not flush only on exit")
+            self.assertIn(b"FIRST_WAIT", received["stderr"], bytes(received["stderr"]))
+            output = received["stdout"].decode()
+            self.assertIn('"small frame"', output, "piped dashboard frame was buffered during the first wait")
+            self.assertLess(len(output.encode()), 4096, "fixture must be too small to fill the output buffer")
+            self.assertEqual(json.loads(output.split("\n", 1)[1]), {"fixture": "small frame"})
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.communicate(timeout=2)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ python3 -I collective.py history [--cwd PATH]          # time | host | exit | di
 python3 -I collective.py memory [--since-event-id ID]  # MemPalace metadata
 python3 -I collective.py ssh-health                    # local units + Tailscale peers, no probes
 python3 -I collective.py capabilities
-python3 -I collective.py monitor [--notify]            # one passive sweep (used by the timer)
+python3 -I collective.py monitor [--notify]            # one passive sweep (manual; no timer runs it)
 ```
 
 ## Send reviewed mail

@@ -291,8 +291,6 @@ def load[T](name: str, default: T) -> T:
         return cast("T", _private_files.read_private_json(STATE / name, limit=MAX_BYTES))
     except FileNotFoundError:
         return default
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return default
 
 
 def save(name: str, obj: object) -> None:
@@ -477,11 +475,26 @@ def release_legacy_hold(now: float, *, dry: bool) -> dict[str, object]:
     return {"released": True, "backup": str(STATE / backup), "acknowledged_alerts": 0}
 
 
+def alerting_agents(ag: list[dict[str, object]] | None) -> list[dict[str, object]] | None:
+    """Treat an incompatible alerting schema as an unavailable observation."""
+    if ag is not None and any(
+        not isinstance(a.get("window_id"), str)
+        or not a["window_id"]
+        or type(a.get("unread")) is not int
+        or cast("int", a["unread"]) < 0
+        or type(a.get("needs_you")) is not bool
+        for a in ag
+    ):
+        return None
+    return ag
+
+
 def agent_rows(
     ag: list[dict[str, object]] | None, mem: MemoryState, now: float, alerts: list[tuple[str, str]]
 ) -> tuple[list[dict[str, object]], set[str]]:
     """Collect tuios metadata and update age tracking without reading bodies."""
     rows: list[dict[str, object]] = []
+    ag = alerting_agents(ag)
     if ag is None:
         alerts.append(
             (
@@ -495,8 +508,8 @@ def agent_rows(
     for a in ag:
         wid = optional_string(a.get("window_id")) or ""
         live.add(wid)
-        unread = int(number(a.get("unread")))
-        needs = bool(a.get("needs_you"))
+        unread = cast("int", a["unread"])
+        needs = cast("bool", a["needs_you"])
         queued = max(0, int(number(a.get("queued"))))
         draft_held = bool(a.get("draft_held"))
         if unread:
@@ -669,7 +682,7 @@ def sweep(*, dry: bool) -> int:
     mem = memory_state(load("memory.json", {}))
     alerts: list[tuple[str, str]] = []
 
-    ag = agents()
+    ag = alerting_agents(agents())
     is_active, reasons = activity(ag or [])
     last_full = number(mem.get("last_full"))
     if "--full" not in sys.argv and not dry and not is_active and ag is not None and now - last_full < QUIET_FULL_S:
@@ -813,7 +826,9 @@ def notice_result(rc: int, output: str) -> tuple[str, int | None]:
         value = _private_files.parse_json(output)
     except (ValueError, TypeError):
         return "unknown", None
-    if not isinstance(value, dict):
+    # This lane invokes the direct tuios CLI, whose receipt is not wrapped.
+    # Do not combine a root ID with an unrelated or conflicting result layer.
+    if not isinstance(value, dict) or "result" in value:
         return "unknown", None
     error = value.get("error")
     code = error.get("code") if isinstance(error, dict) else None
@@ -829,9 +844,12 @@ def notice_result(rc: int, output: str) -> tuple[str, int | None]:
         "rate_limited",
         "agents_disabled",
     }
-    if isinstance(code, str) and code in refused:
+    possible_submission = value.get("success") is True or (
+        type(value.get("message_id")) is int and value["message_id"] > 0
+    )
+    if isinstance(code, str) and code in refused and not possible_submission:
         return "refused", None
-    if rc or error or value.get("success") is False:
+    if rc or error is not None or ("success" in value and value["success"] is not True):
         return "unknown", None
     message_id = value.get("message_id")
     if type(message_id) is int and message_id > 0:
