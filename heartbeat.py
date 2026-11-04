@@ -447,7 +447,7 @@ def main() -> int:
         return 0
     try:
         if "--release-legacy-notice-hold" in sys.argv:
-            print(json.dumps(release_legacy_hold(time.time())))
+            print(json.dumps(release_legacy_hold(time.time(), dry=dry)))
             return 0
         SWEEP.end = time.monotonic() + READ_BUDGET_S
         return sweep(dry=dry)
@@ -456,7 +456,7 @@ def main() -> int:
         os.close(lock_fd)
 
 
-def release_legacy_hold(now: float) -> dict[str, object]:
+def release_legacy_hold(now: float, *, dry: bool) -> dict[str, object]:
     """Operator-only migration: back up memory, then clear a legacy hold without acknowledging any alert.
 
     Run only after a human has inspected the inbox for the pre-upgrade notice. Nothing
@@ -467,6 +467,8 @@ def release_legacy_hold(now: float) -> dict[str, object]:
     mem = memory_state(raw)
     if not mem["notice_legacy_hold"]:
         return {"released": False, "reason": "no legacy notice hold"}
+    if dry:
+        return {"released": False, "dry_run": True, "would_release": True, "acknowledged_alerts": 0}
     backup = f"memory.legacy-hold-{dt.datetime.fromtimestamp(now, dt.UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     save(backup, raw)
     mem["notice_legacy_hold"] = False

@@ -790,6 +790,36 @@ class HistoryGateTests(unittest.TestCase):
         self.assertEqual([(f.rule, f.path) for f in found], [("H-unscanned-oversize", "big.md")])
 
 
+class PinnedToolTests(unittest.TestCase):
+    def test_path_tool_must_report_the_pin_as_its_primary_version(self) -> None:
+        spec = importlib.util.spec_from_file_location("collective_gates", Path(__file__).parent / "tools/check.py")
+        assert spec is not None
+        assert spec.loader is not None
+        gates = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {spec.name: gates}):
+            spec.loader.exec_module(gates)
+        pinned = gates.PINS["ruff"].split("==", 1)[1]
+        cases = {
+            f"ruff 0.0.0; compatible-format {pinned}": False,
+            f"ruff {pinned}0": False,
+            "ruff": False,
+            f"ruff {pinned}": True,
+        }
+        for stdout, accepted in cases.items():
+            with self.subTest(stdout=stdout), tempfile.TemporaryDirectory() as tmp:
+                fake = Path(tmp) / "ruff"
+                fake.write_text(f"#!/bin/sh\necho '{stdout}'\n", encoding="utf-8")
+                fake.chmod(0o700)
+                gates.tool.cache_clear()
+                with mock.patch.dict(os.environ, {"PATH": tmp}):
+                    if accepted:
+                        self.assertEqual(gates.tool("ruff"), [str(fake)])
+                    else:
+                        with self.assertRaises(SystemExit):
+                            gates.tool("ruff")
+        gates.tool.cache_clear()
+
+
 class HeartbeatTests(unittest.TestCase):
     def test_command_errors_are_unknown_not_success(self) -> None:
         for error in (OSError("missing"), subprocess.TimeoutExpired("fixture", 1)):
@@ -1056,6 +1086,18 @@ class HeartbeatLifecycle(unittest.TestCase):
             board: dict[str, Any] = heartbeat.load("heartbeat.json", {})
             self.assertTrue(board["notifications"]["legacy_unknown_hold"])
         held: dict[str, Any] = heartbeat.load("memory.json", {})
+        before = sorted(p.name for p in self.state.iterdir())
+        memory_bytes = (self.state / "memory.json").read_bytes()
+        with (
+            mock.patch.object(sys, "argv", ["heartbeat.py", "--release-legacy-notice-hold", "--dry-run"]),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(heartbeat.main(), 0)
+        preview = json.loads(output.getvalue())
+        self.assertEqual(preview["released"], False)
+        self.assertEqual(preview["would_release"], True)
+        self.assertEqual(sorted(p.name for p in self.state.iterdir()), before)
+        self.assertEqual((self.state / "memory.json").read_bytes(), memory_bytes)
         with (
             mock.patch.object(sys, "argv", ["heartbeat.py", "--release-legacy-notice-hold"]),
             contextlib.redirect_stdout(io.StringIO()) as output,

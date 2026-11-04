@@ -539,15 +539,17 @@ class Gate:
 
 @functools.cache
 def tool(name: str) -> list[str]:
-    """Return the exact pinned tool: a PATH copy whose --version reports the pin, else uv's pinned run.
+    """Return the exact pinned tool: a PATH copy whose primary --version reports the pin, else uv's pinned run.
 
-    A PATH tool reporting any other version fails closed instead of silently gating with it.
+    The primary version is the first version token in --version output; a PATH tool
+    reporting any other primary version fails closed instead of silently gating with it.
     """
     found = shutil.which(name)
     if found:
         rc, out = run([found, "--version"])
         pinned = PINS[name].split("==", 1)[1]
-        if rc != 0 or pinned not in re.findall(r"\d+(?:\.\d+)+", out):
+        primary = re.search(r"\d+(?:\.\d+)+", out)
+        if rc != 0 or primary is None or primary.group(0) != pinned:
             msg = f"{name} on PATH is not {PINS[name]}; install the pin or remove it from PATH"
             raise SystemExit(msg)
         return [found]
