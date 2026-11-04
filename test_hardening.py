@@ -386,6 +386,56 @@ class InstallerTests(unittest.TestCase):
             after = calls[calls.index(["systemctl", "--user", "start", installer.SERVICE]) + 1 :]
             self.assertIn(["systemctl", "--user", "stop", installer.TIMER], after)
             self.assertNotIn("disable", [argv[2] for argv in after])
+            recorded = core.read_private_json(home / ".local/state/collective-plugin/scheduler-install-receipt.json")
+            self.assertEqual(recorded["status"], "rolled-back")
+            self.assertIsNone(recorded["previous"])
+
+    def test_failed_reinstall_records_rollback_and_keeps_prior_accepted_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            receipt_path = home / ".local/state/collective-plugin/scheduler-install-receipt.json"
+            with (
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch.object(installer, "command", return_value=0),
+            ):
+                accepted = installer.install()
+            self.assertEqual(core.read_private_json(receipt_path), accepted)
+
+            def command(argv: Any, *, check: bool = True) -> int:
+                if argv[-2:] == ["start", installer.SERVICE]:
+                    raise installer.CollectiveError("fixture activation refused")
+                return 0
+
+            for attempt in range(2):
+                with (
+                    self.subTest(attempt=attempt),
+                    mock.patch.object(Path, "home", return_value=home),
+                    mock.patch.object(installer, "command", side_effect=command),
+                    self.assertRaisesRegex(installer.CollectiveError, "fixture activation refused"),
+                ):
+                    installer.install()
+                recorded = core.read_private_json(receipt_path)
+                self.assertEqual(recorded["status"], "rolled-back")
+                self.assertEqual(recorded["error"], "fixture activation refused")
+                self.assertEqual(recorded["rollback_errors"], [])
+                self.assertNotEqual(recorded["backup"], accepted["backup"])
+                self.assertEqual(recorded["previous"], accepted)
+
+    def test_unreadable_existing_receipt_is_refused_before_any_unit_change(self) -> None:
+        for content in ("not json", "[]"):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp)
+                receipt = core.private_dir(home / ".local/state/collective-plugin") / "scheduler-install-receipt.json"
+                receipt.write_text(content, encoding="utf-8")
+                receipt.chmod(0o600)
+                with (
+                    mock.patch.object(Path, "home", return_value=home),
+                    mock.patch.object(installer, "command", return_value=0),
+                    self.assertRaises(installer.CollectiveError),
+                ):
+                    installer.install()
+                self.assertFalse((home / ".config/systemd/user" / installer.SERVICE).exists())
+                self.assertEqual(receipt.read_text(encoding="utf-8"), content)
 
     def test_rollback_restores_fresh_install_to_disabled_and_stopped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -404,6 +454,9 @@ class InstallerTests(unittest.TestCase):
 
 
 class CoverageGateTests(unittest.TestCase):
+    @unittest.skipUnless(
+        importlib.util.find_spec("coverage"), "coverage is a test development dependency; tools/check.py provides it"
+    )
     def test_module_below_floor_fails_even_when_aggregate_passes(self) -> None:
         spec = importlib.util.spec_from_file_location("collective_gates", Path(__file__).parent / "tools/check.py")
         assert spec is not None

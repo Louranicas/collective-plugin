@@ -26,7 +26,8 @@ if _spec is None or _spec.loader is None:
     raise ImportError("Cannot load reviewed collective core")
 _core = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_core)
-CollectiveError, private_dir, write_private_json = _core.CollectiveError, _core.private_dir, _core.write_private_json
+CollectiveError, private_dir = _core.CollectiveError, _core.private_dir
+read_private_json, write_private_json = _core.read_private_json, _core.write_private_json
 MAX_UNIT_BYTES = 65536
 SERVICE = "collective-heartbeat.service"
 TIMER = "collective-heartbeat.timer"
@@ -187,6 +188,23 @@ def rollback(
     return errors
 
 
+def accepted_receipt(path: Path) -> dict[str, str] | None:
+    """Return the last successfully installed receipt recorded at path, refusing unsafe or unreadable files."""
+    try:
+        prior = read_private_json(path)
+    except FileNotFoundError:
+        return None
+    except ValueError as exc:
+        raise CollectiveError("Refusing unreadable scheduler install receipt") from exc
+    if not isinstance(prior, dict):
+        raise CollectiveError("Refusing malformed scheduler install receipt")
+    if prior.get("status") != "installed":
+        prior = prior.get("previous")
+    if not isinstance(prior, dict) or prior.get("status") != "installed":
+        return None
+    return {str(k): v for k, v in prior.items() if isinstance(v, str)}
+
+
 def install() -> dict[str, str]:
     """Back up and verify one scheduler, restoring files on setup failure."""
     destination = Path.home() / ".config/systemd/user"
@@ -216,7 +234,8 @@ def install() -> dict[str, str]:
         "undo": f"systemctl --user disable --now {TIMER}; restore backed-up units; systemctl --user daemon-reload",
     }
     receipt_path = state / "scheduler-install-receipt.json"
-    write_private_json(receipt_path, {**receipt, "status": "installing"})
+    accepted = accepted_receipt(receipt_path)
+    write_private_json(receipt_path, {**receipt, "status": "installing", "previous": accepted})
     try:
         for name, content in units().items():
             atomic(destination / name, content.encode())
@@ -227,6 +246,11 @@ def install() -> dict[str, str]:
         write_private_json(receipt_path, receipt)
     except (OSError, CollectiveError, subprocess.TimeoutExpired) as exc:
         errors = rollback(destination, originals, was_enabled=was_enabled, was_active=was_active)
+        failed = {**receipt, "status": "rolled-back", "error": str(exc), "rollback_errors": errors}
+        try:
+            write_private_json(receipt_path, {**failed, "previous": accepted})
+        except (OSError, CollectiveError) as receipt_exc:
+            errors.append(f"record rolled-back receipt: {receipt_exc}")
         if errors:
             exc.add_note("Rollback errors: " + "; ".join(errors))
         raise
