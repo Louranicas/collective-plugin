@@ -44,7 +44,7 @@ flowchart TB
     Team -->|scoped handoffs and evidence| MP
 ```
 
-The Python source and manifest exist in `~/tuios-setup/collective-plugin`. The plugin is enabled in tuios and native herdr, with read-only capabilities and dashboard actions verified (`proof/plugin-activation.json`). Its commands can also be run directly; its heartbeat is a separately installed user timer, currently paused during hardening. Live roster reads have joined three TUIOS peers with 22 native Herdr agents.
+The Python source and manifest exist in `~/tuios-setup/collective-plugin`. The plugin is enabled in tuios and native herdr, with read-only capabilities and dashboard actions verified (`proof/plugin-activation.json`). Its commands can also be run directly; its heartbeat is a separately installed user timer. It was paused during hardening and observed active again after local host acceptance on 2026-11-05 ([[Evidence/Verification]]); query current state with `systemctl --user is-active collective-heartbeat.timer`. Live roster reads have joined three TUIOS peers with 22 native Herdr agents.
 
 Shareable diagram exports: [Components](Rendered/communication.svg) · [Peer test sequence](Rendered/peer-sequence.svg). Regenerate these from this note when the source diagram changes.
 

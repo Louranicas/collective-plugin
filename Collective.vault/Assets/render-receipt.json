@@ -1,28 +1,28 @@
 [
   {
     "source": "Architecture/Communication layers.md",
-    "source_sha256": "d8789324ec0d8da82ae7d46508dba2c7a4f7b0612f36f48ea4d3b7e510d822fd",
+    "source_sha256": "494e82898b2a15288e830ceb49dd9e130a849034cea696fa572d1435ca3fce75",
     "diagram": 1,
     "svg": "Assets/communication-layers-1.svg",
     "sha256": "ec40b3e0d658847d8619da3913a9194c3418161eec39ee8613b4ab05489b5b4f"
   },
   {
     "source": "Architecture/Communication layers.md",
-    "source_sha256": "d8789324ec0d8da82ae7d46508dba2c7a4f7b0612f36f48ea4d3b7e510d822fd",
+    "source_sha256": "494e82898b2a15288e830ceb49dd9e130a849034cea696fa572d1435ca3fce75",
     "diagram": 2,
     "svg": "Assets/communication-layers-2.svg",
     "sha256": "4644af2e204e8d8c4ee01447f7d6b9e9a0298f90c40f1fe9da015db68fb3c88e"
   },
   {
     "source": "Architecture/Runtime and recovery.md",
-    "source_sha256": "b48f1186a30c3949b9d08536e24c38ffa6e56db445d1ebc9ee16e9385179e03c",
+    "source_sha256": "fb8c195864190c33e5e5ee6b9376489e894e88517c2e2c2eebb12d082c6b083e",
     "diagram": 1,
     "svg": "Assets/runtime-and-recovery-1.svg",
     "sha256": "39ae5c99a16210d9ba3e522794009fc1bbde4c42970e67b461988eaf7156dcb2"
   },
   {
     "source": "Architecture/Runtime and recovery.md",
-    "source_sha256": "b48f1186a30c3949b9d08536e24c38ffa6e56db445d1ebc9ee16e9385179e03c",
+    "source_sha256": "fb8c195864190c33e5e5ee6b9376489e894e88517c2e2c2eebb12d082c6b083e",
     "diagram": 2,
     "svg": "Assets/runtime-and-recovery-2.svg",
     "sha256": "ca0db77198c242e7dc3cfb3f446235f3fe77663f09a2a9a8a324b793e3737ff9"
