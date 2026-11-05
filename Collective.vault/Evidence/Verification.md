@@ -150,6 +150,8 @@ Publication redaction (2026-11-04): pane UUIDs, host names, the local user name,
 
 ### Current acceptance receipt, 2026-11-04 (supersedes the 82- and 83-test counts above)
 
+> Superseded on 2026-11-05 by [Soak and release acceptance: 26a2ae11](#soak-and-release-acceptance-26a2ae11-2026-11-04t2303z-to-2026-11-05t0013z) (237 tests, 11 gates). The source hashes and counts below are historical.
+
 Measured 2026-11-04T13:27:43Z (UTC; Australia/ACT is the following calendar day). This is the current local source-bound receipt. Earlier 82-, 83-, 98- and 101-test records are historical snapshots. A later source or test edit requires fresh validation.
 
 | File | sha256 prefix (16 hex) |
