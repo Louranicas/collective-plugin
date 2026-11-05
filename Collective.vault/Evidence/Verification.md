@@ -269,3 +269,39 @@ Pointers only; no research corpus is copied into the vault. Library sources were
 | Codex 2 research (library, zellij, papers) | `art_20261104T200618_3f7a2b2d3e2f`, `…_b0e79a38aa9c`, `…_71ee5b5f43e6`; `~/.local/state/collective-codex2/reliability-20261105/` | Delivered. 20 forked crash schedules passed, with at most 1 fake effect. No empirical claim that coherence improved |
 | R3 gates patch v6 | MemPalace artifact `art_20261104T200737_c1689c7e94ed`; patch sha256 `317e6e84…`, `tools/check.py` `8ec18b09…` | **Accepted** by Codex 2 (#598, #601). Waiting on Codex 3 to apply it after R1 and the jobs work |
 | Rhythms reporter v2 | Same state directory: `rhythms.py` and `fixtures_check.py` (12 checks) | **Not adopted.** Codex 3's jobs share its principles: descriptive only, no hard-coded roster (#601). They make no phase, balance or latency claims. The scheduler design is Codex 3's decision (#582, #621) |
+
+## Soak and release acceptance: 26a2ae11 (2026-11-04T23:03Z to 2026-11-05T00:13Z)
+
+Recorded after the events. Luke authorised a 60-minute team soak (23:03:15Z to 00:03:35Z): use and test the plugin, and fix what breaks. The defects listed below were addressed in a candidate, with Vesper security review, protected CI and host rollout by Codex 3. Known upstream limitations remain listed separately.
+
+**Defects found and fixed in the soak.** Behavioral fixes have regression controls observed red before the fix and green after it; documentation corrections were reviewed directly.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| A malformed existing `memory.json` was silently reset, so a held `unknown` notice could be resent | High | Heartbeat fails closed: exit 1, file preserved, no reset, no resend; recovery in the Scheduler Runbook |
+| tuios schema drift (a missing, string, NaN, bool or negative `unread`, a non-bool `needs_you`, a missing `window_id`) read as "0 unread, clear" | Medium | The whole tuios observation becomes UNKNOWN; prior ages are kept |
+| `monitor --state-dir <relative>` wrote private state into the caller's working directory | Medium | An absolute path is required |
+| `dashboard --watch` never flushed when piped | Low–Medium | Each frame is flushed |
+| A README line said a timer runs `monitor`; `capabilities` omitted the optional desktop notification | Low | Both corrected |
+| Vesper follow-ups: contradictory refusal versus success; duplicate JSON keys and non-finite numbers; `Zl`/`Zp` in single-line fields; mixed receipt layers | Hold, then fixed | Contradictions and mixed layers read UNKNOWN and are never retried; strict JSON; separators refused in subjects |
+
+**Release.** GitHub PR #4 and GitLab MR #3 were merged to `26a2ae11` on both protected `main` branches (candidate commits `2e365f4`, `b597b19`): 237 tests and 11 gates. GitHub `main` CI succeeded on Python 3.12, 3.13 and 3.14; GitLab `main` pipeline #3029590479 succeeded.
+
+**Scheduler evidence.** Each run type is kept separate, so a manual run is never presented as a natural one:
+
+| Phase | What ran | Evidence |
+|---|---|---|
+| Natural recurrence BEFORE the rollout (old head) | collaboration 23:05:39, 23:16:07, 23:26:40, 23:37:08 and 23:47:28Z (10m20s to 10m33s apart); cohesion 23:01:24 and 23:31:52Z (30m28s); heartbeat every tick | All `ok` or `success` |
+| EXPLICIT post-rollout service runs (Codex 3 rollout at 26a2ae11; not timer-driven) | collaboration and cohesion at 23:54:41Z | `ok`; no gaps; source hash = the new `coordination_jobs.py` |
+| NATURAL post-rollout recurrence (timer-driven, new head) | heartbeat 23:57:08, 23:59:28 and 00:01:40Z; collaboration 00:05:08Z (10m27s after the explicit run); cohesion: first natural post-rollout run due 00:25:01Z, **not yet observed** at this receipt (00:13Z) | `success`; job receipts `ok` from the new source |
+
+Across 56 one-minute samples (23:07:26Z to 00:02:28Z): no sample saw a stopped timer, every service result was success, the board was at most 140 s old and there were 0 `unknown` notice outcomes. Codex 2 and Codex 3 independently report the final checks GREEN.
+
+**Limitations.**
+- One-minute sampling cannot prove zero downtime during the brief rollout pause; it shows only that no sample caught a stopped timer.
+- Observations are systemd state, receipts and the board. They are not proof of agent execution or task acceptance.
+- Hostile-input tests used an isolated state directory and a fake `TUIOS_BIN`, so they show consumer behaviour, not the live daemon's.
+- The tuios mail ring evicts old messages, so mail-derived metrics cover only the visible ring.
+- Laptop cross-machine boundary (Codex 3, #845): authenticated SSH transport to the laptop **passes**. Laptop live-agent and plugin acceptance is **blocked**: the queried tuios endpoint returned saved sessions only, the default native Herdr endpoint reported `server_not_running`, and the returned plugin registry did not include `local.collective`. Alternate endpoints were not ruled out. No laptop installation or peer configuration change was made. Claude did not attempt SSH (sole transport owner: Codex 3).
+
+**Incident (Claude).** During the soak a scratch copy made with `cp -a` of a git worktree shared its `.git` pointer, so a commit landed on Codex 3's candidate branch (`6e65db9`). It was contained with no content loss, preserved without a rewrite, and recorded privately. Rule adopted: scratch work only through an independent clone or `git archive`.
